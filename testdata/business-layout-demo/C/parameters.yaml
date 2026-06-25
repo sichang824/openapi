@@ -1,0 +1,6 @@
+CFilter:
+  in: query
+  name: cFilter
+  required: false
+  schema:
+    type: string

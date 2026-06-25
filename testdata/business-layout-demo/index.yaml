@@ -1,0 +1,33 @@
+components:
+  parameters:
+    AFilter:
+      $ref: ./A/parameters.yaml#/AFilter
+    BFilter:
+      $ref: ./B/parameters.yaml#/BFilter
+    CFilter:
+      $ref: ./C/parameters.yaml#/CFilter
+    Page:
+      $ref: ./common/pagination.yaml#/Page
+  responses:
+    Error:
+      $ref: ./common/errors.yaml#/Error
+  schemas:
+    AOrder:
+      $ref: ./A/schemas.yaml#/AOrder
+    BOrder:
+      $ref: ./B/schemas.yaml#/BOrder
+    COrder:
+      $ref: ./C/schemas.yaml#/COrder
+    SharedModel:
+      $ref: ./common/common.yaml#/SharedModel
+info:
+  title: Business Layout Demo
+  version: 0.1.0
+openapi: 3.0.3
+paths:
+  /a/orders:
+    $ref: ./A/paths.yaml#/~1a~1orders
+  /b/orders:
+    $ref: ./B/paths.yaml#/~1b~1orders
+  /c/orders:
+    $ref: ./C/paths.yaml#/~1c~1orders

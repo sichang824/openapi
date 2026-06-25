@@ -1,0 +1,10 @@
+# Skill Development Template - Git Ignore
+.env
+.DS_Store
+*.log
+bin/
+dist/
+node_modules/
+.venv/
+__pycache__/
+.to

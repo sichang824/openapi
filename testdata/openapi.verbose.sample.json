@@ -1,0 +1,151 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Verbose Sample API",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/reports": {
+      "post": {
+        "summary": "Create report",
+        "description": "Create a report with filters.",
+        "operationId": "createReport",
+        "tags": ["reports"],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "Source filter in query parameter",
+            "example": "scheduled",
+            "deprecated": true,
+            "allowEmptyValue": true,
+            "style": "form",
+            "explode": false,
+            "allowReserved": true,
+            "schema": {
+              "$ref": "#/components/schemas/ReportQuery/properties/source"
+            }
+          },
+          {
+            "name": "filters",
+            "in": "query",
+            "required": false,
+            "description": "JSON filters encoded in query",
+            "examples": {
+              "basic": {
+                "summary": "Basic filter",
+                "description": "Single region selector",
+                "value": "{\"region\":\"north\"}"
+              },
+              "empty": { "value": "{}" },
+              "remote": {
+                "externalValue": "https://example.com/examples/filters.json"
+              }
+            },
+            "content": {
+              "application/json": {
+                "example": {"region":"north"},
+                "examples": {
+                  "inline": { "value": {"region":"north","status":"active"} }
+                },
+                "schema": {
+                  "type": "object",
+                  "description": "Filter payload"
+                }
+              }
+            }
+          },
+          {
+            "$ref": "#/components/parameters/TraceID"
+          }
+        ],
+        "requestBody": {
+          "description": "Request payload for report creation.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportQuery"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Report created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "TraceID": {
+        "name": "X-Trace-Id",
+        "in": "header",
+        "required": false,
+        "description": "Correlation id passed by gateway",
+        "schema": {
+          "type": "string",
+          "example": "trace-123"
+        }
+      }
+    },
+    "schemas": {
+      "ReportQuery": {
+        "type": "object",
+        "required": ["source", "limit"],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Report source",
+            "example": "manual",
+            "enum": ["manual", "scheduled"]
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum rows",
+            "example": 100,
+            "default": 100,
+            "maximum": 1000
+          }
+        }
+      },
+      "ReportResponse": {
+        "type": "object",
+        "required": ["code", "data"],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "description": "Business code",
+            "example": 200
+          },
+          "data": {
+            "$ref": "#/components/schemas/ReportData"
+          }
+        }
+      },
+      "ReportData": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "description": "Returned rows",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      }
+    }
+  }
+}

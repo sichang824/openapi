@@ -1,0 +1,8 @@
+{
+  "include": [
+    "SKILL.md",
+    "assets/**",
+    "bin/**",
+    "scripts/**"
+  ]
+}

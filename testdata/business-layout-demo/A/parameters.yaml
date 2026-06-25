@@ -1,0 +1,6 @@
+AFilter:
+  in: query
+  name: aFilter
+  required: false
+  schema:
+    type: string
