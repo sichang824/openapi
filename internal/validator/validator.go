@@ -125,7 +125,38 @@ func validateType(field string, value interface{}, schema spec.Schema) error {
 	return nil
 }
 
-func BuildFormBody(params map[string]interface{}, operation spec.Operation) (string, error) {
+// BuildRequestBodyParams returns only parameters that belong in the request body,
+// excluding path, query, and header parameters defined on the operation.
+func BuildRequestBodyParams(params map[string]interface{}, operation spec.Operation, doc *spec.Document) map[string]interface{} {
+	nonBody := nonBodyParamNames(operation, doc)
+	bodyParams := make(map[string]interface{}, len(params))
+	for key, value := range params {
+		if nonBody[key] {
+			continue
+		}
+		bodyParams[key] = value
+	}
+	return bodyParams
+}
+
+func nonBodyParamNames(operation spec.Operation, doc *spec.Document) map[string]bool {
+	names := make(map[string]bool)
+	for _, parameter := range operation.Parameters {
+		effective := parameter
+		if doc != nil {
+			if resolved, ok := doc.ResolveParameter(parameter); ok {
+				effective = resolved
+			}
+		}
+		switch effective.In {
+		case "path", "query", "header":
+			names[effective.Name] = true
+		}
+	}
+	return names
+}
+
+func BuildFormBody(params map[string]interface{}, operation spec.Operation, doc *spec.Document) (string, error) {
 	if operation.RequestBody == nil || len(operation.RequestBody.Content) == 0 {
 		return "", nil
 	}
@@ -135,8 +166,9 @@ func BuildFormBody(params map[string]interface{}, operation spec.Operation) (str
 		return "", nil
 	}
 
+	bodyParams := BuildRequestBodyParams(params, operation, doc)
 	values := url.Values{}
-	for key, value := range params {
+	for key, value := range bodyParams {
 		values.Set(key, fmt.Sprintf("%v", value))
 	}
 

@@ -1,6 +1,7 @@
 # Skill Development Template - Git Ignore
 .env
 .DS_Store
+/oapi
 *.log
 bin/
 dist/

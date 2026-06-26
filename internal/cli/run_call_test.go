@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -872,5 +873,166 @@ func TestRun_Call_SendsBearerTokenFromFlag(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "secret-token") {
 		t.Fatalf("did not expect bearer token to be printed in verbose output, got: %s", out.String())
+	}
+}
+
+func TestRun_Call_ExcludesPathParamsFromJSONBody(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		if err := json.Unmarshal(body, &gotBody); err != nil {
+			t.Fatalf("failed to parse request body as JSON: %v; body=%q", err, string(body))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	specPath := filepath.Join(t.TempDir(), "openapi.json")
+	specContent := `{
+  "openapi": "3.0.3",
+  "info": {"title": "T", "version": "1"},
+  "paths": {
+    "/app-runtime/apps/{appID}/api/uploads": {
+      "post": {
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {"type": "string"}
+                },
+                "required": ["title"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "OK"}
+        }
+      }
+    }
+  }
+}`
+	if err := os.WriteFile(specPath, []byte(specContent), 0o644); err != nil {
+		t.Fatalf("failed to write temp spec: %v", err)
+	}
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	err := Run([]string{
+		"call",
+		"-f", specPath,
+		"-e", "POST /app-runtime/apps/{appID}/api/uploads",
+		"--base-url", server.URL,
+		"--params", `{"appID":"file-share-demo","title":"Upload test"}`,
+	}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("Run returned error: %v; stderr=%s", err, errOut.String())
+	}
+
+	if gotPath != "/app-runtime/apps/file-share-demo/api/uploads" {
+		t.Fatalf("expected substituted path, got %q", gotPath)
+	}
+	if _, ok := gotBody["appID"]; ok {
+		t.Fatalf("expected appID to be excluded from JSON body, got %#v", gotBody)
+	}
+	if gotBody["title"] != "Upload test" {
+		t.Fatalf("expected title in JSON body, got %#v", gotBody)
+	}
+}
+
+func TestRun_Call_ExcludesInferredPathParamsFromJSONBody(t *testing.T) {
+	var gotBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		if err := json.Unmarshal(body, &gotBody); err != nil {
+			t.Fatalf("failed to parse request body as JSON: %v; body=%q", err, string(body))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	specPath := filepath.Join(t.TempDir(), "openapi.json")
+	specContent := `{
+  "openapi": "3.0.3",
+  "info": {"title": "T", "version": "1"},
+  "paths": {
+    "/app-runtime/apps/{appID}/api/uploads": {
+      "post": {
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {"type": "string"}
+                },
+                "required": ["title"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "OK"}
+        }
+      }
+    }
+  }
+}`
+	if err := os.WriteFile(specPath, []byte(specContent), 0o644); err != nil {
+		t.Fatalf("failed to write temp spec: %v", err)
+	}
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	err := Run([]string{
+		"call",
+		"-f", specPath,
+		"-e", "POST /app-runtime/apps/file-share-demo/api/uploads",
+		"--base-url", server.URL,
+		"--params", `{"title":"Upload test"}`,
+	}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("Run returned error: %v; stderr=%s", err, errOut.String())
+	}
+
+	if _, ok := gotBody["appID"]; ok {
+		t.Fatalf("expected inferred appID to be excluded from JSON body, got %#v", gotBody)
+	}
+	if gotBody["title"] != "Upload test" {
+		t.Fatalf("expected title in JSON body, got %#v", gotBody)
 	}
 }

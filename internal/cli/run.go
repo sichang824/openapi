@@ -200,13 +200,14 @@ func executeCall(opts callOptions, stdout io.Writer, stderr io.Writer) error {
 			contentType = validator.PreferredContentType(operation.RequestBody.Content)
 		}
 		if strings.Contains(contentType, "application/x-www-form-urlencoded") {
-			formBody, err := validator.BuildFormBody(params, operation)
+			formBody, err := validator.BuildFormBody(params, operation, doc)
 			if err != nil {
 				return err
 			}
 			body = []byte(formBody)
 		} else if strings.Contains(contentType, "application/json") {
-			bodyData, err := json.Marshal(params)
+			bodyParams := validator.BuildRequestBodyParams(params, operation, doc)
+			bodyData, err := json.Marshal(bodyParams)
 			if err != nil {
 				return err
 			}

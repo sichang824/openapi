@@ -8,6 +8,75 @@ import (
 	"openapi/internal/spec"
 )
 
+func TestBuildRequestBodyParams_ExcludesPathAndQueryParams(t *testing.T) {
+	doc := &spec.Document{}
+	operation := spec.Operation{
+		Parameters: []spec.Parameter{
+			{Name: "appID", In: "path", Required: true, Schema: spec.Schema{Type: "string"}},
+			{Name: "page", In: "query", Schema: spec.Schema{Type: "integer"}},
+		},
+		RequestBody: &spec.RequestBody{
+			Content: map[string]spec.MediaType{
+				"application/json": {
+					Schema: spec.Schema{
+						Type: "object",
+						Properties: map[string]spec.Schema{
+							"title": {Type: "string"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	params := map[string]interface{}{
+		"appID": "file-share-demo",
+		"page":  float64(1),
+		"title": "Upload test",
+	}
+
+	bodyParams := BuildRequestBodyParams(params, operation, doc)
+	if _, ok := bodyParams["appID"]; ok {
+		t.Fatalf("expected appID to be excluded from body params, got %#v", bodyParams)
+	}
+	if _, ok := bodyParams["page"]; ok {
+		t.Fatalf("expected page to be excluded from body params, got %#v", bodyParams)
+	}
+	if bodyParams["title"] != "Upload test" {
+		t.Fatalf("expected title in body params, got %#v", bodyParams)
+	}
+}
+
+func TestBuildFormBody_ExcludesPathAndQueryParams(t *testing.T) {
+	doc := &spec.Document{}
+	operation := spec.Operation{
+		Parameters: []spec.Parameter{
+			{Name: "appID", In: "path", Required: true, Schema: spec.Schema{Type: "string"}},
+		},
+		RequestBody: &spec.RequestBody{
+			Content: map[string]spec.MediaType{
+				"application/x-www-form-urlencoded": {},
+			},
+		},
+	}
+
+	params := map[string]interface{}{
+		"appID":  "file-share-demo",
+		"source": "ai_analysis",
+	}
+
+	body, err := BuildFormBody(params, operation, doc)
+	if err != nil {
+		t.Fatalf("BuildFormBody returned error: %v", err)
+	}
+	if strings.Contains(body, "appID=") {
+		t.Fatalf("expected appID to be excluded from form body, got %q", body)
+	}
+	if !strings.Contains(body, "source=ai_analysis") {
+		t.Fatalf("expected source in form body, got %q", body)
+	}
+}
+
 func TestBuildFormBody_EncodesValues(t *testing.T) {
 	operation := spec.Operation{
 		RequestBody: &spec.RequestBody{
@@ -22,7 +91,7 @@ func TestBuildFormBody_EncodesValues(t *testing.T) {
 		"searchCondition": "{\"start_date\":\"2026-02-09 00:00:00\",\"count\":\"1\"}",
 	}
 
-	body, err := BuildFormBody(params, operation)
+	body, err := BuildFormBody(params, operation, nil)
 	if err != nil {
 		t.Fatalf("BuildFormBody returned error: %v", err)
 	}
