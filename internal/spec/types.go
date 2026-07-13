@@ -12,18 +12,20 @@ import (
 )
 
 type Document struct {
-	Swagger     string              `json:"swagger"`
-	OpenAPI     string              `json:"openapi"`
-	Info        Info                `json:"info"`
-	Host        string              `json:"host"`
-	BasePath    string              `json:"basePath"`
-	Schemes     []string            `json:"schemes"`
-	Servers     []Server            `json:"servers"`
-	Tags        []Tag               `json:"tags"`
-	Paths       map[string]PathItem `json:"paths"`
-	Components  Components          `json:"components"`
-	Definitions map[string]Schema   `json:"definitions"`
-	Warnings    []string            `json:"-"`
+	Swagger             string                    `json:"swagger"`
+	OpenAPI             string                    `json:"openapi"`
+	Info                Info                      `json:"info"`
+	Host                string                    `json:"host"`
+	BasePath            string                    `json:"basePath"`
+	Schemes             []string                  `json:"schemes"`
+	Servers             []Server                  `json:"servers"`
+	Security            SecurityRequirements      `json:"security"`
+	Tags                []Tag                     `json:"tags"`
+	Paths               map[string]PathItem       `json:"paths"`
+	Components          Components                `json:"components"`
+	SecurityDefinitions map[string]SecurityScheme `json:"securityDefinitions"`
+	Definitions         map[string]Schema         `json:"definitions"`
+	Warnings            []string                  `json:"-"`
 }
 
 type Tag struct {
@@ -55,15 +57,27 @@ var httpOperationKeys = map[string]struct{}{
 }
 
 type Operation struct {
-	Summary     string              `json:"summary"`
-	Description string              `json:"description"`
-	OperationID string              `json:"operationId"`
-	Tags        []string            `json:"tags"`
-	Consumes    []string            `json:"consumes"`
-	Produces    []string            `json:"produces"`
-	Parameters  []Parameter         `json:"parameters"`
-	RequestBody *RequestBody        `json:"requestBody"`
-	Responses   map[string]Response `json:"responses"`
+	Summary     string                `json:"summary"`
+	Description string                `json:"description"`
+	OperationID string                `json:"operationId"`
+	Tags        []string              `json:"tags"`
+	Consumes    []string              `json:"consumes"`
+	Produces    []string              `json:"produces"`
+	Parameters  []Parameter           `json:"parameters"`
+	RequestBody *RequestBody          `json:"requestBody"`
+	Responses   map[string]Response   `json:"responses"`
+	Security    *SecurityRequirements `json:"security"`
+}
+
+type SecurityRequirement map[string][]string
+type SecurityRequirements []SecurityRequirement
+
+type SecurityScheme struct {
+	Type         string `json:"type"`
+	In           string `json:"in"`
+	Name         string `json:"name"`
+	Scheme       string `json:"scheme"`
+	BearerFormat string `json:"bearerFormat"`
 }
 
 type Parameter struct {
@@ -108,8 +122,9 @@ type MediaType struct {
 }
 
 type Components struct {
-	Schemas    map[string]Schema    `json:"schemas"`
-	Parameters map[string]Parameter `json:"parameters"`
+	Schemas         map[string]Schema         `json:"schemas"`
+	Parameters      map[string]Parameter      `json:"parameters"`
+	SecuritySchemes map[string]SecurityScheme `json:"securitySchemes"`
 }
 
 type Schema struct {
@@ -257,6 +272,14 @@ func (d *Document) ResolveParameterRef(ref string) (Parameter, bool) {
 		return d.ResolveParameter(p)
 	}
 	return p, true
+}
+
+func (d *Document) SecurityScheme(name string) (SecurityScheme, bool) {
+	if scheme, ok := d.Components.SecuritySchemes[name]; ok {
+		return scheme, true
+	}
+	scheme, ok := d.SecurityDefinitions[name]
+	return scheme, ok
 }
 
 func (d *Document) ResolveSchemaRef(ref string) (Schema, bool) {

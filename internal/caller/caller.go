@@ -22,8 +22,16 @@ type CallRequest struct {
 	ContentType string
 	Body        []byte
 	Headers     http.Header
+	AutoHeaders []ResolvedHeader
 	// Cookie is the raw value for the HTTP Cookie header (e.g. "a=1; b=2").
 	Cookie string
+}
+
+type ResolvedHeader struct {
+	Name   string
+	Value  string
+	Source string
+	Secret bool
 }
 
 type CallResponse struct {
@@ -50,22 +58,24 @@ func Call(req *CallRequest) (*CallResponse, error) {
 		return nil, err
 	}
 
-	if req.ContentType != "" {
-		httpReq.Header.Set("Content-Type", req.ContentType)
-	}
-
-	if c := strings.TrimSpace(req.Cookie); c != "" {
-		httpReq.Header.Set("Cookie", c)
-	}
-
 	httpReq.Header.Set("Accept", "application/json")
+	for _, header := range req.AutoHeaders {
+		httpReq.Header.Set(header.Name, header.Value)
+	}
 	for key, values := range req.Headers {
+		httpReq.Header.Del(key)
 		for _, value := range values {
 			httpReq.Header.Add(key, value)
 		}
 	}
+	if req.ContentType != "" {
+		httpReq.Header.Set("Content-Type", req.ContentType)
+	}
+	if c := strings.TrimSpace(req.Cookie); c != "" {
+		httpReq.Header.Set("Cookie", c)
+	}
 
-	client := &http.Client{}
+	client := &http.Client{CheckRedirect: rejectCrossOriginAutoHeaderRedirects(req.AutoHeaders)}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -83,6 +93,49 @@ func Call(req *CallRequest) (*CallResponse, error) {
 		Body:       string(respBody),
 		URL:        url,
 	}, nil
+}
+
+func rejectCrossOriginAutoHeaderRedirects(headers []ResolvedHeader) func(*http.Request, []*http.Request) error {
+	if len(headers) == 0 {
+		return nil
+	}
+	return func(next *http.Request, via []*http.Request) error {
+		if len(via) == 0 || sameOrigin(via[0].URL, next.URL) {
+			return nil
+		}
+		return fmt.Errorf(
+			"blocked cross-origin redirect while automatic environment headers are active: %s -> %s",
+			originString(via[0].URL),
+			originString(next.URL),
+		)
+	}
+}
+
+func sameOrigin(left, right *url.URL) bool {
+	return strings.EqualFold(left.Scheme, right.Scheme) &&
+		strings.EqualFold(left.Hostname(), right.Hostname()) &&
+		effectivePort(left) == effectivePort(right)
+}
+
+func effectivePort(value *url.URL) string {
+	if port := value.Port(); port != "" {
+		return port
+	}
+	switch strings.ToLower(value.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
+}
+
+func originString(value *url.URL) string {
+	if value == nil {
+		return "<unknown>"
+	}
+	return value.Scheme + "://" + value.Host
 }
 
 func buildURL(baseURL, path string, params map[string]interface{}, operation spec.Operation, includeQuery bool) string {

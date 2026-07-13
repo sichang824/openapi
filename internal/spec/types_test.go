@@ -185,6 +185,86 @@ paths:
 	}
 }
 
+func TestLoad_PreservesSecurityInheritanceAndExplicitPublicOperation(t *testing.T) {
+	t.Parallel()
+
+	specFile := filepath.Join(t.TempDir(), "security.yaml")
+	content := `openapi: "3.0.3"
+info:
+  title: Security
+  version: "1.0.0"
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+paths:
+  /secure:
+    get:
+      responses:
+        "200":
+          description: ok
+  /public:
+    get:
+      security: []
+      responses:
+        "200":
+          description: ok
+`
+	if err := os.WriteFile(specFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp spec: %v", err)
+	}
+
+	doc, err := Load(specFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if len(doc.Security) != 1 {
+		t.Fatalf("root security = %+v, want one requirement", doc.Security)
+	}
+	scheme, ok := doc.Components.SecuritySchemes["ApiKeyAuth"]
+	if !ok || scheme.Type != "apiKey" || scheme.In != "header" || scheme.Name != "X-Api-Key" {
+		t.Fatalf("unexpected security scheme: %+v", scheme)
+	}
+	if got := doc.Paths["/secure"]["get"].Security; got != nil {
+		t.Fatalf("inherited operation security pointer = %+v, want nil", got)
+	}
+	publicSecurity := doc.Paths["/public"]["get"].Security
+	if publicSecurity == nil || len(*publicSecurity) != 0 {
+		t.Fatalf("public operation security = %+v, want explicit empty slice", publicSecurity)
+	}
+}
+
+func TestLoad_LoadsSwaggerSecurityDefinitions(t *testing.T) {
+	t.Parallel()
+
+	specFile := filepath.Join(t.TempDir(), "swagger.json")
+	content := `{
+  "swagger": "2.0",
+  "info": {"title": "Security", "version": "1.0.0"},
+  "security": [{"LegacyKey": []}],
+  "securityDefinitions": {
+    "LegacyKey": {"type": "apiKey", "in": "header", "name": "X-Legacy-Key"}
+  },
+  "paths": {}
+}`
+	if err := os.WriteFile(specFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp spec: %v", err)
+	}
+
+	doc, err := Load(specFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	scheme, ok := doc.SecurityScheme("LegacyKey")
+	if !ok || scheme.Name != "X-Legacy-Key" {
+		t.Fatalf("legacy security scheme = %+v, %t", scheme, ok)
+	}
+}
+
 func TestLoad_NormalizesMalformedEnumObject(t *testing.T) {
 	t.Parallel()
 

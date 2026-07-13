@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"openapi/internal/autoheaders"
 	"openapi/internal/caller"
 	"openapi/internal/output"
 	"openapi/internal/query"
@@ -147,24 +148,31 @@ func executeQuery(opts queryOptions, stdout io.Writer, stderr io.Writer) error {
 }
 
 type callOptions struct {
-	File        string
-	Name        string
-	Endpoint    string
-	BaseURL     string
-	Params      string
-	ParamsFile  string
-	ParamsURL   string
-	BodyFile    string
-	ContentType string
-	Cookie      string
-	CookiePath  string
-	Headers     []string
-	BearerToken string
-	Strict      bool
-	Verbose     int
+	File           string
+	Name           string
+	Endpoint       string
+	BaseURL        string
+	Params         string
+	ParamsFile     string
+	ParamsURL      string
+	BodyFile       string
+	ContentType    string
+	Cookie         string
+	CookiePath     string
+	Headers        []string
+	BearerToken    string
+	AutoHeaders    bool
+	AutoHeadersSet bool
+	Strict         bool
+	Verbose        int
 }
 
 func executeCall(opts callOptions, stdout io.Writer, stderr io.Writer) error {
+	autoHeadersEnabled, err := autoheaders.ResolveEnabled(opts.AutoHeaders, opts.AutoHeadersSet, os.LookupEnv)
+	if err != nil {
+		return err
+	}
+
 	resolvedCookiePath := strings.TrimSpace(opts.CookiePath)
 
 	if strings.TrimSpace(opts.Cookie) != "" && resolvedCookiePath != "" {
@@ -210,6 +218,40 @@ func executeCall(opts callOptions, stdout io.Writer, stderr io.Writer) error {
 	operation, pathParams, found := findOperation(doc, method, path)
 	if !found {
 		return fmt.Errorf("endpoint not found: %s %s", method, path)
+	}
+
+	resolvedAutoHeaders := make([]caller.ResolvedHeader, 0)
+	if autoHeadersEnabled {
+		candidates, err := autoheaders.ScanEnvironment(os.Environ())
+		if err != nil {
+			return err
+		}
+		resolution := autoheaders.Resolve(doc, operation, candidates, headers)
+		if resolution.SecurityRequired && !resolution.SecuritySatisfied {
+			message := "automatic headers could not satisfy the operation's OpenAPI security requirements"
+			if opts.Strict {
+				return errors.New(message)
+			}
+			_, _ = fmt.Fprintf(stderr, "Warning: %s; continuing without automatic security headers\n", message)
+		}
+		for _, header := range resolution.Headers {
+			resolvedAutoHeaders = append(resolvedAutoHeaders, caller.ResolvedHeader{
+				Name: header.Name, Value: header.Value, Source: header.Source, Secret: header.Secret,
+			})
+		}
+	}
+	if len(resolvedAutoHeaders) > 0 {
+		specServer := ""
+		if len(doc.Servers) > 0 {
+			specServer = strings.TrimSpace(doc.Servers[0].URL)
+		}
+		originWarning, err := autoheaders.ValidateOrigin(specServer, resolvedBaseURL)
+		if err != nil {
+			return err
+		}
+		if originWarning != "" {
+			_, _ = fmt.Fprintf(stderr, "Warning: %s; automatic headers will be sent to %s\n", originWarning, requestOrigin(resolvedBaseURL))
+		}
 	}
 
 	params, err := validator.ParseParams(opts.Params, opts.ParamsFile, opts.ParamsURL)
@@ -280,6 +322,15 @@ func executeCall(opts callOptions, stdout io.Writer, stderr io.Writer) error {
 		Body:        body,
 		Cookie:      cookieHeader,
 		Headers:     headers,
+		AutoHeaders: resolvedAutoHeaders,
+	}
+
+	if len(resolvedAutoHeaders) > 0 {
+		names := make([]string, 0, len(resolvedAutoHeaders))
+		for _, header := range resolvedAutoHeaders {
+			names = append(names, header.Name)
+		}
+		_, _ = fmt.Fprintf(stderr, "Auto headers enabled: %s (environment, redacted) -> %s\n", strings.Join(names, ", "), requestOrigin(resolvedBaseURL))
 	}
 
 	callResp, err := caller.Call(callReq)
@@ -307,6 +358,14 @@ func executeCall(opts callOptions, stdout io.Writer, stderr io.Writer) error {
 
 	_, _ = fmt.Fprintln(stdout, caller.FormatResponse(callResp, opts.Verbose))
 	return nil
+}
+
+func requestOrigin(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return rawURL
+	}
+	return parsed.Scheme + "://" + parsed.Host
 }
 
 func parseEndpoint(endpoint string) (string, string) {
@@ -457,11 +516,20 @@ func parseCallHeaders(rawHeaders []string, bearerToken string) (http.Header, err
 	if trimmedToken == "" {
 		return headers, nil
 	}
-	if headers.Get("Authorization") != "" {
+	if callHeadersContain(headers, "Authorization") {
 		return nil, errors.New("use only one of --bearer-token or --header 'Authorization: ...'")
 	}
 	headers.Set("Authorization", "Bearer "+trimmedToken)
 	return headers, nil
+}
+
+func callHeadersContain(headers http.Header, name string) bool {
+	for key := range headers {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func readNetscapeCookieJar(path string) (string, error) {

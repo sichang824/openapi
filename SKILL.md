@@ -143,6 +143,10 @@ oapi call -f ./openapi.json -e "GET /users" --base-url https://api.example.com
 oapi call -f ./openapi.json -e "GET /protected" --base-url https://api.example.com --bearer-token "$TOKEN"
 oapi call -f ./openapi.json -e "GET /protected" --base-url https://api.example.com --header "X-Trace-Id: debug-123"
 
+# Opt-in contract-filtered environment headers
+OAPI_HEADER_X_API_KEY="$TOKEN" oapi call -n kb -e "GET /protected" --auto-headers
+OAPI_AUTO_HEADERS=1 OAPI_HEADER_AUTHORIZATION="Bearer $TOKEN" oapi call -n iam -e "GET /protected"
+
 # Cookie session (curl -b style; never commit secrets)
 oapi call -f ./openapi.json -e "GET /api/me" --base-url https://api.example.com --cookie 'session_id=...; access_token=...'
 oapi call -f ./openapi.json -e "GET /api/me" --base-url https://api.example.com --cookie-path ~/.config/myapp/cookies.jar
@@ -230,11 +234,21 @@ oapi call -f .\openapi.json -e "POST /goods/list" --params-url "page=1&page_size
 - Do not pass both `--bearer-token` and `--header 'Authorization: ...'` in the same command.
 - Prefer `--bearer-token` for protected endpoint debugging unless the target API uses a non-bearer scheme.
 
+### Automatic environment headers (call)
+
+- Automatic environment headers are disabled by default. Enable them with `--auto-headers` or `OAPI_AUTO_HEADERS=1`; explicit `--auto-headers=false` overrides the environment.
+- Candidate variables use `OAPI_HEADER_*`, for example `OAPI_HEADER_X_API_KEY` -> `X-Api-Key`. Empty values are ignored; CR/LF, duplicate normalized names, and reserved transport/content headers are rejected.
+- The current operation must declare the candidate through effective OpenAPI security or an `in: header` parameter. `security: []` disables inherited authentication for a public operation.
+- Explicit `--header`, `--bearer-token`, `--cookie`, and `--content-type` inputs take precedence over environment candidates.
+- Environment-sourced values are always treated as secrets. Output reports only header names, target origin, and redaction markers.
+- An absolute `--base-url` must have the same origin as the spec server when automatic headers are applied. Cross-origin redirects are rejected.
+
 ### Base URL rules
 
 - `--base-url` overrides the spec.
 - If `--base-url` is omitted, `oapi call` uses the first `servers[].url` from the spec.
 - If neither exists, the command fails and the user must provide `--base-url`.
+- With automatic headers active, a different origin is rejected. A relative or unresolved spec server produces a warning because the origin cannot be verified.
 
 ### Validation modes
 

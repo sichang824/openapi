@@ -141,15 +141,17 @@ Common boundaries and pitfalls:
 - use -n/--name for <name>.openapi.yaml under $OAPI_SPECS_DIR (default ~/.openapi/specs), or -f for a path
 - pass exactly one of --params, --params-file, or --params-url
 - if the spec has no servers[], you must provide --base-url
+- automatic OAPI_HEADER_* injection is off by default and only uses headers declared by the operation contract
 - strict mode blocks on validation errors; default mode still sends requests when only warnings exist
 - POST/PUT/PATCH/DELETE can have real side effects, so treat call as a live operation tool`,
-		Example: "  oapi call -f ./openapi.yaml -e \"GET /users\" --base-url https://api.example.com\n  oapi call -n skill -e \"POST /cart/add\" --params '{\"item_id\":\"123\",\"quantity\":2}'\n  oapi call --name skill-internal -e \"GET /protected\" --bearer-token '<token>'",
+		Example: "  oapi call -f ./openapi.yaml -e \"GET /users\" --base-url https://api.example.com\n  oapi call -n skill -e \"POST /cart/add\" --params '{\"item_id\":\"123\",\"quantity\":2}'\n  oapi call -n kb -e \"GET /protected\" --auto-headers\n  oapi call --name skill-internal -e \"GET /protected\" --bearer-token '<token>'",
 		GroupID: "inspection",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("name") && strings.TrimSpace(opts.Name) == "" {
 				return errors.New("--name must not be empty")
 			}
+			opts.AutoHeadersSet = cmd.Flags().Changed("auto-headers")
 			return executeCall(opts, stdout, stderr)
 		},
 	}
@@ -166,6 +168,7 @@ Common boundaries and pitfalls:
 	flags.StringVar(&opts.ContentType, "content-type", "", "override request Content-Type header")
 	flags.StringArrayVar(&opts.Headers, "header", nil, "custom request header in 'Name: Value' form; repeatable")
 	flags.StringVar(&opts.BearerToken, "bearer-token", "", "set Authorization: Bearer <token> on the request")
+	flags.BoolVar(&opts.AutoHeaders, "auto-headers", false, "apply declared request headers from OAPI_HEADER_* environment variables")
 	flags.StringVar(&opts.Cookie, "cookie", "", "raw Cookie header value (semicolon-separated; same idea as curl -H 'Cookie: ...')")
 	flags.StringVar(&opts.CookiePath, "cookie-path", "", "read cookies from a Netscape cookie jar file (curl -b file style)")
 	flags.BoolVar(&opts.Strict, "strict", false, "strict parameter validation")

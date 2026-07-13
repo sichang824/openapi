@@ -869,6 +869,249 @@ func TestRun_Call_InjectsQueryParametersDefinedAtPathLevel(t *testing.T) {
 	}
 }
 
+func TestRun_Call_AutoHeadersOptInAndCLIOverride(t *testing.T) {
+	tests := []struct {
+		name       string
+		env        string
+		args       []string
+		wantHeader bool
+	}{
+		{name: "default disabled"},
+		{name: "environment enables", env: "1", wantHeader: true},
+		{name: "flag enables over disabled environment", env: "off", args: []string{"--auto-headers"}, wantHeader: true},
+		{name: "explicit false skips invalid environment", env: "invalid", args: []string{"--auto-headers=false"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const secret = "auto-secret-value"
+			var gotHeader string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotHeader = r.Header.Get("X-Api-Key")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			}))
+			defer server.Close()
+
+			specPath := writeAutoHeaderSpec(t, server.URL)
+			t.Setenv("OAPI_AUTO_HEADERS", tt.env)
+			t.Setenv("OAPI_HEADER_X_API_KEY", secret)
+
+			args := []string{"call", "-f", specPath, "-e", "GET /protected"}
+			args = append(args, tt.args...)
+			var out bytes.Buffer
+			var errOut bytes.Buffer
+			err := Run(args, &out, &errOut)
+			if err != nil {
+				t.Fatalf("Run returned error: %v; stderr=%s", err, errOut.String())
+			}
+
+			if tt.wantHeader && gotHeader != secret {
+				t.Fatalf("server header = %q, want injected value", gotHeader)
+			}
+			if !tt.wantHeader && gotHeader != "" {
+				t.Fatalf("server header = %q, want no automatic header", gotHeader)
+			}
+			combinedOutput := out.String() + errOut.String()
+			if strings.Contains(combinedOutput, secret) {
+				t.Fatalf("secret leaked into command output: %s", combinedOutput)
+			}
+			if tt.wantHeader {
+				if !strings.Contains(errOut.String(), "Auto headers enabled: X-Api-Key") || !strings.Contains(errOut.String(), "redacted") {
+					t.Fatalf("expected redacted auto-header notice, stderr=%s", errOut.String())
+				}
+			}
+		})
+	}
+}
+
+func TestRun_Call_AutoHeadersEnforcesSpecOrigin(t *testing.T) {
+	t.Run("rejects cross-origin base URL override", func(t *testing.T) {
+		var requests int
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests++
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer target.Close()
+
+		specPath := writeAutoHeaderSpec(t, "https://contract.example.com")
+		t.Setenv("OAPI_HEADER_X_API_KEY", "must-not-leak")
+		var out bytes.Buffer
+		var errOut bytes.Buffer
+		err := Run([]string{
+			"call", "-f", specPath, "-e", "GET /protected",
+			"--base-url", target.URL, "--auto-headers",
+		}, &out, &errOut)
+		if err == nil || !strings.Contains(err.Error(), "origin") {
+			t.Fatalf("error = %v, want origin mismatch", err)
+		}
+		if requests != 0 {
+			t.Fatalf("target received %d requests, want none", requests)
+		}
+		if strings.Contains(err.Error()+errOut.String(), "must-not-leak") {
+			t.Fatal("automatic header value leaked in error output")
+		}
+	})
+
+	t.Run("warns when relative server origin cannot be verified", func(t *testing.T) {
+		var gotHeader string
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotHeader = r.Header.Get("X-Api-Key")
+			_, _ = w.Write([]byte(`{}`))
+		}))
+		defer target.Close()
+
+		specPath := writeAutoHeaderSpec(t, "/api")
+		t.Setenv("OAPI_HEADER_X_API_KEY", "relative-secret")
+		var out bytes.Buffer
+		var errOut bytes.Buffer
+		err := Run([]string{
+			"call", "-f", specPath, "-e", "GET /protected",
+			"--base-url", target.URL, "--auto-headers",
+		}, &out, &errOut)
+		if err != nil {
+			t.Fatalf("Run returned error: %v; stderr=%s", err, errOut.String())
+		}
+		if gotHeader != "relative-secret" {
+			t.Fatalf("server header = %q, want automatic header", gotHeader)
+		}
+		if !strings.Contains(errOut.String(), "cannot verify") {
+			t.Fatalf("expected unverifiable-origin warning, stderr=%s", errOut.String())
+		}
+	})
+}
+
+func writeAutoHeaderSpec(t *testing.T, serverURL string) string {
+	t.Helper()
+
+	specPath := filepath.Join(t.TempDir(), "openapi.yaml")
+	content := `openapi: 3.0.3
+info:
+  title: Auto Header API
+  version: 1.0.0
+servers:
+  - url: ` + serverURL + `
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+paths:
+  /protected:
+    get:
+      responses:
+        "200":
+          description: OK
+`
+	if err := os.WriteFile(specPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	return specPath
+}
+
+func TestRun_Call_AutoHeadersRespectContractAndExplicitValues(t *testing.T) {
+	type received struct {
+		apiKey        string
+		authorization string
+		traceID       string
+	}
+	requests := make(map[string]received)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests[r.URL.Path] = received{
+			apiKey:        r.Header.Get("X-Api-Key"),
+			authorization: r.Header.Get("Authorization"),
+			traceID:       r.Header.Get("X-Trace-Id"),
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	specPath := filepath.Join(t.TempDir(), "openapi.yaml")
+	content := `openapi: 3.0.3
+info:
+  title: Contract Filtering
+  version: 1.0.0
+servers:
+  - url: ` + server.URL + `
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+paths:
+  /protected:
+    get:
+      parameters:
+        - name: X-Trace-Id
+          in: header
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+  /public:
+    get:
+      security: []
+      responses:
+        "200":
+          description: OK
+`
+	if err := os.WriteFile(specPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	t.Setenv("OAPI_AUTO_HEADERS", "1")
+	t.Setenv("OAPI_HEADER_X_API_KEY", "environment-key")
+	t.Setenv("OAPI_HEADER_AUTHORIZATION", "Bearer unrelated")
+	t.Setenv("OAPI_HEADER_X_TRACE_ID", "trace-from-env")
+
+	for _, call := range [][]string{
+		{"call", "-f", specPath, "-e", "GET /protected", "--header", "X-Api-Key: explicit-key"},
+		{"call", "-f", specPath, "-e", "GET /public"},
+	} {
+		var out bytes.Buffer
+		var errOut bytes.Buffer
+		if err := Run(call, &out, &errOut); err != nil {
+			t.Fatalf("Run(%v): %v; stderr=%s", call, err, errOut.String())
+		}
+	}
+
+	if got := requests["/protected"]; got.apiKey != "explicit-key" || got.traceID != "trace-from-env" || got.authorization != "" {
+		t.Fatalf("protected headers = %+v, want explicit API key, automatic trace, no unrelated authorization", got)
+	}
+	if got := requests["/public"]; got != (received{}) {
+		t.Fatalf("public headers = %+v, want no automatic headers", got)
+	}
+}
+
+func TestRun_Call_AutoHeadersStrictSecurityFailure(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	specPath := writeAutoHeaderSpec(t, server.URL)
+	t.Setenv("OAPI_HEADER_X_API_KEY", "")
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	err := Run([]string{
+		"call", "-f", specPath, "-e", "GET /protected", "--auto-headers", "--strict",
+	}, &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "security requirements") {
+		t.Fatalf("error = %v, want strict security failure", err)
+	}
+	if requests != 0 {
+		t.Fatalf("server received %d requests, want none", requests)
+	}
+}
+
 func TestRun_Call_SendsBearerTokenFromFlag(t *testing.T) {
 	var gotAuthorization string
 
@@ -917,6 +1160,16 @@ func TestRun_Call_SendsBearerTokenFromFlag(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "secret-token") {
 		t.Fatalf("did not expect bearer token to be printed in verbose output, got: %s", out.String())
+	}
+}
+
+func TestParseCallHeaders_RejectsBearerWithExplicitAuthorization(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"Authorization: explicit", "Authorization:"} {
+		if _, err := parseCallHeaders([]string{raw}, "bearer-token"); err == nil {
+			t.Fatalf("expected %q to conflict with bearer token", raw)
+		}
 	}
 }
 

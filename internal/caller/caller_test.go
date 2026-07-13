@@ -168,3 +168,69 @@ func TestCall_RepeatsArrayQueryParams(t *testing.T) {
 		}
 	}
 }
+
+func TestCall_AutoHeadersRedirectPolicy(t *testing.T) {
+	t.Run("same origin keeps automatic header", func(t *testing.T) {
+		var redirectedHeader string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/start" {
+				http.Redirect(w, r, "/final", http.StatusFound)
+				return
+			}
+			redirectedHeader = r.Header.Get("X-Trace-Id")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		_, err := Call(&CallRequest{
+			BaseURL:   server.URL,
+			Method:    http.MethodGet,
+			Path:      "/start",
+			Params:    map[string]interface{}{},
+			Operation: spec.Operation{},
+			AutoHeaders: []ResolvedHeader{{
+				Name: "X-Trace-Id", Value: "same-origin-secret", Source: "environment", Secret: true,
+			}},
+		})
+		if err != nil {
+			t.Fatalf("Call returned error: %v", err)
+		}
+		if redirectedHeader != "same-origin-secret" {
+			t.Fatalf("redirected header = %q, want preserved automatic header", redirectedHeader)
+		}
+	})
+
+	t.Run("cross origin is rejected before target request", func(t *testing.T) {
+		var targetRequests int
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			targetRequests++
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer target.Close()
+
+		source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, target.URL+"/final", http.StatusFound)
+		}))
+		defer source.Close()
+
+		_, err := Call(&CallRequest{
+			BaseURL:   source.URL,
+			Method:    http.MethodGet,
+			Path:      "/start",
+			Params:    map[string]interface{}{},
+			Operation: spec.Operation{},
+			AutoHeaders: []ResolvedHeader{{
+				Name: "X-Any-Secret", Value: "redirect-secret", Source: "environment", Secret: true,
+			}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "cross-origin") {
+			t.Fatalf("error = %v, want cross-origin redirect rejection", err)
+		}
+		if strings.Contains(err.Error(), "redirect-secret") {
+			t.Fatalf("secret leaked in redirect error: %v", err)
+		}
+		if targetRequests != 0 {
+			t.Fatalf("redirect target received %d requests, want none", targetRequests)
+		}
+	})
+}

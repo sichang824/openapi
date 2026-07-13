@@ -316,6 +316,13 @@ oapi call -f openapi.json -e "GET /protected" --base-url https://api.example.com
 oapi call -f openapi.json -e "GET /protected" --base-url https://api.example.com --header "X-Trace-Id: debug-123"
 ```
 
+**Opt-in environment headers:**
+
+```bash
+OAPI_HEADER_X_API_KEY="$TOKEN" oapi call -n kb -e "GET /protected" --auto-headers
+OAPI_AUTO_HEADERS=1 OAPI_HEADER_AUTHORIZATION="Bearer $TOKEN" oapi call -n iam -e "GET /protected"
+```
+
 **Repeated keys and legacy array-style names are preserved:**
 
 ```bash
@@ -328,7 +335,7 @@ oapi call -f openapi.json -e "GET /Api/v1/search/conditions" --params-url "order
 - **JSON**: Automatically marshals params to JSON
 - **Path parameters**: Substitutes `{param}` in URL path
 - **Query parameters**: Appends `?param=value` to URL and preserves repeated keys for array-like inputs
-- **Headers**: Supports explicit request headers via `--header` and bearer auth via `--bearer-token`
+- **Headers**: Supports explicit request headers plus opt-in, OpenAPI-filtered `OAPI_HEADER_*` candidates
 
 ### Auth and session notes
 
@@ -336,6 +343,15 @@ oapi call -f openapi.json -e "GET /Api/v1/search/conditions" --params-url "order
 - `--header` is repeatable and can be used for headers like `X-Trace-Id`, custom tenant routing, or manual `Authorization` overrides.
 - Do not combine `--bearer-token` with `--header "Authorization: ..."`; the CLI treats that as conflicting input.
 - `--cookie` and `--cookie-path` remain the right tools for session-cookie flows.
+
+### Automatic environment headers
+
+- Default is off. Enable with `--auto-headers` or `OAPI_AUTO_HEADERS=1`; use `--auto-headers=false` to override an enabled environment.
+- Only variables prefixed with `OAPI_HEADER_` are candidates. Names replace `_` with `-`, so `OAPI_HEADER_X_API_KEY` becomes `X-Api-Key`.
+- The operation's effective `security` or `in: header` parameters must allow each injected header. A public operation with `security: []` does not inherit root authentication.
+- Explicit CLI headers, bearer tokens, cookies, and content type win over environment values.
+- Reserved headers, CR/LF values, and normalized-name collisions fail before the request is sent.
+- Environment values are always redacted. Automatic headers cannot be sent to a different origin than an absolute spec server, and cross-origin redirects are rejected.
 
 ### Response output
 

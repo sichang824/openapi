@@ -76,9 +76,13 @@ oapi call -f ./openapi.json -e "GET /workflow-runs" --params '{"workflowDefiniti
 # Header and auth injection
 oapi call -f ./openapi.json -e "GET /protected" --base-url https://api.example.com --bearer-token "$TOKEN"
 oapi call -f ./openapi.json -e "GET /protected" --base-url https://api.example.com --header "X-Trace-Id: debug-123"
+
+# Opt-in environment headers, filtered by the operation's OpenAPI contract
+OAPI_HEADER_X_API_KEY="$TOKEN" oapi call -n kb -e "GET /protected" --auto-headers
+OAPI_AUTO_HEADERS=1 OAPI_HEADER_AUTHORIZATION="Bearer $TOKEN" oapi call -n iam -e "GET /protected"
 ```
 
-`call` supports JSON and YAML specs, `--params` / `--params-file` / `--params-url` are mutually exclusive, and `--strict` upgrades warnings into validation failures.
+`call` supports JSON and YAML specs, `--params` / `--params-file` / `--params-url` are mutually exclusive, and `--strict` upgrades warnings into validation failures. Automatic headers are disabled by default. When enabled, only `OAPI_HEADER_*` candidates allowed by effective OpenAPI security or header parameters are sent; explicit CLI values win.
 
 ## Repository map
 
@@ -86,6 +90,7 @@ oapi call -f ./openapi.json -e "GET /protected" --base-url https://api.example.c
 - `internal/spec/`: spec loading, JSON/YAML decoding, typed structures
 - `internal/query/`: endpoint search and ranking
 - `internal/validator/`: parameter validation
+- `internal/autoheaders/`: opt-in environment parsing, contract selection, and origin checks
 - `internal/caller/`: request construction and execution
 - `internal/scaffold/`, `internal/edit/`: split-spec authoring and formatting
 - `internal/bundle/`, `internal/generate/`, `internal/doctor/`: orchestration helpers
@@ -98,4 +103,4 @@ oapi call -f ./openapi.json -e "GET /protected" --base-url https://api.example.c
 - Keep examples executable and copy-paste ready.
 - Add tests first for CLI behavior changes.
 - `spec.Load` accepts JSON and YAML.
-- `oapi call` supports path-item-level parameter inheritance, custom headers, bearer auth, and cookie-backed sessions.
+- `oapi call` supports path-item-level parameter inheritance, explicit auth/session inputs, and opt-in contract-filtered environment headers.
