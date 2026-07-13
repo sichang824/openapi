@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -22,8 +23,9 @@ func newRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 	configureHelpTemplates()
 
 	root := &cobra.Command{
-		Use:   "oapi",
-		Short: "Split OpenAPI authoring, validation, generation, and inspection CLI",
+		Use:     "oapi",
+		Version: version,
+		Short:   "Split OpenAPI authoring, validation, generation, and inspection CLI",
 		Long: `oapi helps maintain a split OpenAPI workspace without hand-editing
 aggregator refs, and provides query/call workflows for large specs.
 
@@ -44,6 +46,8 @@ external tooling, inspect endpoint contracts, and call documented APIs.`,
 			return cmd.Help()
 		},
 	}
+	root.SetVersionTemplate("oapi {{.Version}}\n")
+	root.Flags().Bool("version", false, "version for oapi")
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	root.SetHelpTemplate(commandHelpTemplate)
@@ -54,6 +58,7 @@ external tooling, inspect endpoint contracts, and call documented APIs.`,
 	)
 
 	root.AddCommand(
+		newVersionCommand(stdout),
 		newInitCommand(stdout, stderr),
 		newAddCommand(stdout, stderr),
 		newFmtCommand(stdout, stderr),
@@ -65,6 +70,17 @@ external tooling, inspect endpoint contracts, and call documented APIs.`,
 		newCallCommand(stdout, stderr),
 	)
 	return root
+}
+
+func newVersionCommand(stdout io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			_, _ = fmt.Fprintf(stdout, "oapi %s\n", version)
+		},
+	}
 }
 
 func newQueryCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
