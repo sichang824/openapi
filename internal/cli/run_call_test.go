@@ -60,6 +60,50 @@ func writeQuickBIReportSpec(t *testing.T) string {
 	return specPath
 }
 
+func TestRun_CallResolvesSpecNameFromConfiguredDirectory(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/users" {
+			t.Fatalf("expected request to /users, got %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	specsDir := t.TempDir()
+	specPath := filepath.Join(specsDir, "skill.openapi.yaml")
+	specContent := `openapi: 3.0.3
+info:
+  title: Named API
+  version: 1.0.0
+paths:
+  /users:
+    get:
+      responses:
+        "200":
+          description: OK
+`
+	if err := os.WriteFile(specPath, []byte(specContent), 0o644); err != nil {
+		t.Fatalf("write named spec: %v", err)
+	}
+	t.Setenv("OAPI_SPECS_DIR", specsDir)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	err := Run([]string{
+		"call",
+		"-n", "skill",
+		"-e", "GET /users",
+		"--base-url", server.URL,
+	}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("Run returned error: %v; stderr=%s", err, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"ok": true`) {
+		t.Fatalf("expected successful response, got: %s", out.String())
+	}
+}
+
 func TestRun_Call_UsesCurlStyleFormRequestWithoutUnknownParameterWarning(t *testing.T) {
 	var gotQuery string
 	var gotBody string

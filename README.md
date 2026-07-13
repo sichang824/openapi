@@ -50,17 +50,20 @@ The split workspace source entry is `./api/openapi/index.yaml`. Bundled artifact
 
 ```bash
 oapi query -f ./openapi.json
+oapi query -n skill -q workflow -vv
+oapi query --name skill-internal -q report -vvv --limit 20
 oapi query -f ./openapi.json -q workflow -vv
 oapi query -f ./openapi.json -q report -vvv --limit 20
 ```
 
-`query` accepts a single spec file, `-q` is optional, and higher verbosity expands more contract detail.
+`-n` / `--name` resolves `<name>.openapi.yaml` from `${OAPI_SPECS_DIR:-~/.openapi/specs}`. It is mutually exclusive with `-f`. `-q` is optional, and higher verbosity expands more contract detail.
 
 ### Call documented endpoints
 
 ```bash
 # YAML or JSON spec input
 oapi call -f ./openapi.yaml -e "GET /users" --base-url https://api.example.com
+oapi call -n skill -e "GET /users" --base-url https://api.example.com
 
 # JSON params or params file
 oapi call -f ./openapi.json -e "POST /cart/add" --params '{"item_id":"123","quantity":2}'

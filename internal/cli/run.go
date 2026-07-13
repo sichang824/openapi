@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -31,11 +32,56 @@ type queryCallExample struct {
 
 type queryOptions struct {
 	File       string
+	Name       string
 	Keyword    string
 	Limit      int
 	Offset     int
 	JSONOutput bool
 	Verbose    int
+}
+
+const specsDirEnv = "OAPI_SPECS_DIR"
+
+type specInput struct {
+	Path  string
+	Flag  string
+	Value string
+}
+
+func resolveSpecInput(file, name string) (specInput, error) {
+	file = strings.TrimSpace(file)
+	name = strings.TrimSpace(name)
+	if file != "" && name != "" {
+		return specInput{}, errors.New("use only one of -f or --name")
+	}
+	if name == "" {
+		if file == "" {
+			file = "openapi.json"
+		}
+		return specInput{Path: file, Flag: "-f", Value: file}, nil
+	}
+	if name == "." || name == ".." || strings.ContainsAny(name, `/\\`) {
+		return specInput{}, fmt.Errorf("invalid spec name %q: use a file name without path separators", name)
+	}
+
+	dir := strings.TrimSpace(os.Getenv(specsDirEnv))
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return specInput{}, fmt.Errorf("resolve home directory: %w", err)
+		}
+		dir = filepath.Join(home, ".openapi", "specs")
+	}
+	return specInput{
+		Path:  filepath.Join(dir, name+".openapi.yaml"),
+		Flag:  "-n",
+		Value: name,
+	}, nil
+}
+
+func resolveSpecFile(file, name string) (string, error) {
+	input, err := resolveSpecInput(file, name)
+	return input.Path, err
 }
 
 func executeQuery(opts queryOptions, stdout io.Writer, stderr io.Writer) error {
@@ -46,7 +92,11 @@ func executeQuery(opts queryOptions, stdout io.Writer, stderr io.Writer) error {
 		return errors.New("offset must be greater than or equal to 0")
 	}
 
-	doc, err := spec.Load(opts.File)
+	input, err := resolveSpecInput(opts.File, opts.Name)
+	if err != nil {
+		return err
+	}
+	doc, err := spec.Load(input.Path)
 	if err != nil {
 		return err
 	}
@@ -69,7 +119,7 @@ func executeQuery(opts queryOptions, stdout io.Writer, stderr io.Writer) error {
 	}
 
 	if opts.JSONOutput {
-		return writeQueryJSON(stdout, doc, opts.File, opts.Keyword, results, allResults, page, level)
+		return writeQueryJSON(stdout, doc, input, opts.Keyword, results, allResults, page, level)
 	}
 
 	if len(allResults) == 0 {
@@ -87,17 +137,18 @@ func executeQuery(opts queryOptions, stdout io.Writer, stderr io.Writer) error {
 		output.RenderHeader(stdout, doc)
 		_, _ = fmt.Fprintf(stdout, "no endpoints in current window (offset=%d, limit=%d, total=%d)\n", opts.Offset, opts.Limit, len(allResults))
 		_, _ = fmt.Fprintln(stdout)
-		renderQueryPaginationHint(stdout, opts.File, opts.Keyword, page)
+		renderQueryPaginationHint(stdout, input, opts.Keyword, page)
 		return nil
 	}
 	output.Render(stdout, doc, results, level)
-	renderQueryPaginationHint(stdout, opts.File, opts.Keyword, page)
-	renderQueryCallExamples(stdout, doc, opts.File, results)
+	renderQueryPaginationHint(stdout, input, opts.Keyword, page)
+	renderQueryCallExamples(stdout, doc, input, results)
 	return nil
 }
 
 type callOptions struct {
 	File        string
+	Name        string
 	Endpoint    string
 	BaseURL     string
 	Params      string
@@ -137,7 +188,11 @@ func executeCall(opts callOptions, stdout io.Writer, stderr io.Writer) error {
 		return errors.New("endpoint is required, use -e")
 	}
 
-	doc, err := spec.Load(opts.File)
+	file, err := resolveSpecFile(opts.File, opts.Name)
+	if err != nil {
+		return err
+	}
+	doc, err := spec.Load(file)
 	if err != nil {
 		return err
 	}
@@ -506,7 +561,7 @@ func paginateEndpoints(endpoints []query.Endpoint, limit, offset int) ([]query.E
 	return endpoints[offset:end], page
 }
 
-func renderQueryPaginationHint(w io.Writer, file, keyword string, page queryPage) {
+func renderQueryPaginationHint(w io.Writer, input specInput, keyword string, page queryPage) {
 	if page.Total == 0 {
 		return
 	}
@@ -519,14 +574,14 @@ func renderQueryPaginationHint(w io.Writer, file, keyword string, page queryPage
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintf(w, "Showing %d-%d of %d endpoints (limit=%d, offset=%d)\n", start, end, page.Total, page.Limit, page.Offset)
 	if page.Next >= 0 {
-		_, _ = fmt.Fprintf(w, "Next page: oapi query -f %s --limit %d --offset %d", quote(file), page.Limit, page.Next)
+		_, _ = fmt.Fprintf(w, "Next page: oapi query %s %s --limit %d --offset %d", input.Flag, quote(input.Value), page.Limit, page.Next)
 		if strings.TrimSpace(keyword) != "" {
 			_, _ = fmt.Fprintf(w, " -q %s", quote(keyword))
 		}
 		_, _ = fmt.Fprintln(w)
 	}
 	if page.Prev >= 0 {
-		_, _ = fmt.Fprintf(w, "Previous page: oapi query -f %s --limit %d --offset %d", quote(file), page.Limit, page.Prev)
+		_, _ = fmt.Fprintf(w, "Previous page: oapi query %s %s --limit %d --offset %d", input.Flag, quote(input.Value), page.Limit, page.Prev)
 		if strings.TrimSpace(keyword) != "" {
 			_, _ = fmt.Fprintf(w, " -q %s", quote(keyword))
 		}
@@ -539,12 +594,12 @@ func renderQueryPaginationHint(w io.Writer, file, keyword string, page queryPage
 	}
 }
 
-func renderQueryCallExamples(w io.Writer, doc *spec.Document, file string, results []query.Endpoint) {
+func renderQueryCallExamples(w io.Writer, doc *spec.Document, input specInput, results []query.Endpoint) {
 	if len(results) == 0 {
 		return
 	}
 
-	examples := buildQueryCallExamples(doc, file, results)
+	examples := buildQueryCallExamples(doc, input, results)
 	if len(examples) == 0 {
 		return
 	}
@@ -559,10 +614,10 @@ func renderQueryCallExamples(w io.Writer, doc *spec.Document, file string, resul
 	}
 }
 
-func buildQueryCallExamples(doc *spec.Document, file string, results []query.Endpoint) []queryCallExample {
+func buildQueryCallExamples(doc *spec.Document, input specInput, results []query.Endpoint) []queryCallExample {
 	examples := make([]queryCallExample, 0, len(results))
 	for _, endpoint := range results {
-		command := buildQueryCallCommand(doc, file, endpoint)
+		command := buildQueryCallCommand(doc, input, endpoint)
 		examples = append(examples, queryCallExample{
 			Method:  endpoint.Method,
 			Path:    endpoint.Path,
@@ -573,10 +628,10 @@ func buildQueryCallExamples(doc *spec.Document, file string, results []query.End
 	return examples
 }
 
-func buildQueryCallCommand(doc *spec.Document, file string, endpoint query.Endpoint) string {
+func buildQueryCallCommand(doc *spec.Document, input specInput, endpoint query.Endpoint) string {
 	goos := queryCallGOOS()
 	quote := func(value string) string { return shellQuoteForGOOS(value, goos) }
-	command := fmt.Sprintf("oapi call -f %s -e %s", quote(file), quote(endpoint.Method+" "+endpoint.Path))
+	command := fmt.Sprintf("oapi call %s %s -e %s", input.Flag, quote(input.Value), quote(endpoint.Method+" "+endpoint.Path))
 	params := buildExampleParams(doc, endpoint.Operation)
 	if len(params) == 0 {
 		return command
@@ -988,7 +1043,7 @@ type queryJSONResult struct {
 	Score       int                      `json:"score,omitempty"`
 }
 
-func writeQueryJSON(stdout io.Writer, doc *spec.Document, file, keyword string, results []query.Endpoint, allResults []query.Endpoint, page queryPage, verbosity int) error {
+func writeQueryJSON(stdout io.Writer, doc *spec.Document, input specInput, keyword string, results []query.Endpoint, allResults []query.Endpoint, page queryPage, verbosity int) error {
 	servers := make([]string, 0, len(doc.Servers))
 	for _, server := range doc.Servers {
 		if strings.TrimSpace(server.URL) != "" {
@@ -1002,7 +1057,7 @@ func writeQueryJSON(stdout io.Writer, doc *spec.Document, file, keyword string, 
 		}
 	}
 	payload := queryJSONOutput{
-		File:      file,
+		File:      input.Path,
 		Keyword:   keyword,
 		Verbosity: verbosity,
 		Page: queryJSONPage{
@@ -1013,7 +1068,7 @@ func writeQueryJSON(stdout io.Writer, doc *spec.Document, file, keyword string, 
 			HasNext: page.Next >= 0,
 			HasPrev: page.Prev >= 0,
 		},
-		Hints:   buildQueryJSONHints(file, keyword, page),
+		Hints:   buildQueryJSONHints(input, keyword, page),
 		Results: make([]queryJSONResult, 0, len(results)),
 		Servers: servers,
 		Tags:    tags,
@@ -1060,13 +1115,13 @@ func writeQueryJSON(stdout io.Writer, doc *spec.Document, file, keyword string, 
 	return encoder.Encode(payload)
 }
 
-func buildQueryJSONHints(file, keyword string, page queryPage) queryJSONHints {
+func buildQueryJSONHints(input specInput, keyword string, page queryPage) queryJSONHints {
 	hints := queryJSONHints{}
 	if page.Next >= 0 {
-		hints.NextPageCommand = buildQueryCommand(file, keyword, page.Limit, page.Next)
+		hints.NextPageCommand = buildQueryCommand(input, keyword, page.Limit, page.Next)
 	}
 	if page.Prev >= 0 {
-		hints.PreviousPageCommand = buildQueryCommand(file, keyword, page.Limit, page.Prev)
+		hints.PreviousPageCommand = buildQueryCommand(input, keyword, page.Limit, page.Prev)
 	}
 	if strings.TrimSpace(keyword) == "" {
 		hints.SearchTip = "use -q <keyword> to narrow results, for example: -q order"
@@ -1076,9 +1131,9 @@ func buildQueryJSONHints(file, keyword string, page queryPage) queryJSONHints {
 	return hints
 }
 
-func buildQueryCommand(file, keyword string, limit, offset int) string {
+func buildQueryCommand(input specInput, keyword string, limit, offset int) string {
 	quote := func(value string) string { return shellQuoteForGOOS(value, queryCallGOOS()) }
-	command := fmt.Sprintf("oapi query -f %s --limit %d --offset %d", quote(file), limit, offset)
+	command := fmt.Sprintf("oapi query %s %s --limit %d --offset %d", input.Flag, quote(input.Value), limit, offset)
 	if strings.TrimSpace(keyword) != "" {
 		command += fmt.Sprintf(" -q %s", quote(keyword))
 	}

@@ -194,7 +194,10 @@ Purpose: quickly inspect endpoints from a bundled or standalone OpenAPI spec fil
 
 ```bash
 oapi query -f ./openapi.json
+oapi query -n skill
 ```
+
+`-n` / `--name` maps a short name to `${OAPI_SPECS_DIR:-~/.openapi/specs}/<name>.openapi.yaml`. For example, `-n skill-internal` loads `skill-internal.openapi.yaml`. Use either `-n` or `-f`, not both.
 
 ### Verbosity levels
 
@@ -258,7 +261,10 @@ Purpose: directly call API endpoints with automatic parameter validation and req
 ```bash
 oapi call -f openapi.json -e "POST /cart/add" --params '{"item_id":"123","quantity":2}'
 oapi call -f openapi.yaml -e "GET /users" --base-url https://api.example.com
+oapi call -n skill -e "GET /users" --base-url https://api.example.com
 ```
+
+Named specs follow the same `${OAPI_SPECS_DIR:-~/.openapi/specs}/<name>.openapi.yaml` rule as `query`; `-n` / `--name` and `-f` are mutually exclusive.
 
 ### Parameter validation
 

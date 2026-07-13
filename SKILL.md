@@ -109,6 +109,7 @@ oapi generate \
 ```bash
 # List endpoints with the default summary view
 oapi query -f ./openapi.json
+oapi query -n skill
 oapi query -f ./openapi.yaml -q upload -vv
 
 # Search and inspect progressively
@@ -117,11 +118,14 @@ oapi query -f ./openapi.json -q order -vv
 oapi query -f ./openapi.json -q payment -vvv --limit 20
 ```
 
+`-n` / `--name` loads `${OAPI_SPECS_DIR:-~/.openapi/specs}/<name>.openapi.yaml`; for example, `-n skill-internal` loads `skill-internal.openapi.yaml`. Use either `-n` or `-f`, not both.
+
 ### Call API endpoints
 
 ```bash
 # Call from YAML or JSON specs
 oapi call -f ./openapi.yaml -e "GET /users" --base-url https://api.example.com
+oapi call -n skill -e "GET /users" --base-url https://api.example.com
 
 # Call with inline JSON params (preferred for small payloads)
 oapi call -f ./openapi.json -e "POST /cart/add" --params '{"item_id":"123","quantity":2}'

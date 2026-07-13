@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -10,6 +12,86 @@ import (
 
 func expectedQueryCallFlag() string {
 	return queryCallParamFlag(runtime.GOOS)
+}
+
+func TestRun_QueryResolvesSpecNameFromConfiguredDirectory(t *testing.T) {
+	specsDir := t.TempDir()
+	specPath := filepath.Join(specsDir, "skill-internal.openapi.yaml")
+	data, err := os.ReadFile("../../testdata/openapi.sample.yaml")
+	if err != nil {
+		t.Fatalf("read sample spec: %v", err)
+	}
+	if err := os.WriteFile(specPath, data, 0o644); err != nil {
+		t.Fatalf("write named spec: %v", err)
+	}
+	t.Setenv("OAPI_SPECS_DIR", specsDir)
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	err = Run([]string{
+		"query",
+		"--name", "skill-internal",
+		"-q", "ping",
+	}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "GET /ping") {
+		t.Fatalf("expected named spec to be queried, got: %s", output)
+	}
+	if !strings.Contains(output, "oapi call -n 'skill-internal' -e 'GET /ping'") {
+		t.Fatalf("expected generated call example to preserve name selector, got: %s", output)
+	}
+}
+
+func TestRun_QueryRejectsEmptyName(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	err := Run([]string{"query", "-n", ""}, &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "--name must not be empty") {
+		t.Fatalf("expected empty name error, got: %v", err)
+	}
+}
+
+func TestRun_QueryRejectsFileAndNameTogether(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	err := Run([]string{
+		"query",
+		"-f", "../../testdata/openapi.sample.json",
+		"-n", "skill",
+	}, &out, &errOut)
+	if err == nil {
+		t.Fatal("expected -f and -n to be mutually exclusive")
+	}
+	if !strings.Contains(err.Error(), "if any flags in the group") {
+		t.Fatalf("expected mutual exclusion error, got: %v", err)
+	}
+}
+
+func TestResolveSpecFile_DefaultDirectory(t *testing.T) {
+	t.Setenv("OAPI_SPECS_DIR", "")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolve home directory: %v", err)
+	}
+
+	got, err := resolveSpecFile("", "skill")
+	if err != nil {
+		t.Fatalf("resolveSpecFile returned error: %v", err)
+	}
+	want := filepath.Join(home, ".openapi", "specs", "skill.openapi.yaml")
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestResolveSpecFile_RejectsPathLikeName(t *testing.T) {
+	if _, err := resolveSpecFile("", "../skill"); err == nil {
+		t.Fatal("expected path-like spec name to be rejected")
+	}
 }
 
 func TestRun_DefaultVerbosityShowsOnlySummary(t *testing.T) {

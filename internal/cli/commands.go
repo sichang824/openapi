@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -68,7 +69,6 @@ external tooling, inspect endpoint contracts, and call documented APIs.`,
 
 func newQueryCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 	opts := queryOptions{
-		File:   "openapi.json",
 		Limit:  20,
 		Offset: 0,
 	}
@@ -82,18 +82,24 @@ progressive detail levels, or emit structured JSON for tooling.
 
 Common boundaries and pitfalls:
 - query reads a single bundled or standalone spec file; it does not traverse a split directory
+- use -n/--name for <name>.openapi.yaml under $OAPI_SPECS_DIR (default ~/.openapi/specs), or -f for a path
 - -q is optional, so "oapi query -f ./openapi.json" is the full inventory mode
 - --limit and --offset page both list mode and search mode
 - use -vvv only when you actually need expanded contract detail`,
-		Example: "  oapi query -f ./openapi.json\n  oapi query -f ./openapi.json -q workflow -vv\n  oapi query -f ./openapi.json -q order --json",
+		Example: "  oapi query -f ./openapi.json\n  oapi query -n skill -q workflow -vv\n  oapi query --name skill-internal -q order --json",
 		GroupID: "inspection",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("name") && strings.TrimSpace(opts.Name) == "" {
+				return errors.New("--name must not be empty")
+			}
 			return executeQuery(opts, stdout, stderr)
 		},
 	}
 	flags := cmd.Flags()
-	flags.StringVarP(&opts.File, "f", "f", opts.File, "OpenAPI spec file")
+	flags.StringVarP(&opts.File, "f", "f", "", "OpenAPI spec file (default openapi.json)")
+	flags.StringVarP(&opts.Name, "name", "n", "", "spec name resolved from $"+specsDirEnv+" (default ~/.openapi/specs)")
+	cmd.MarkFlagsMutuallyExclusive("f", "name")
 	flags.StringVarP(&opts.Keyword, "q", "q", "", "keyword")
 	flags.IntVar(&opts.Limit, "limit", opts.Limit, "result limit")
 	flags.IntVar(&opts.Offset, "offset", opts.Offset, "result offset")
@@ -103,7 +109,7 @@ Common boundaries and pitfalls:
 }
 
 func newCallCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
-	opts := callOptions{File: "openapi.json"}
+	opts := callOptions{}
 	cmd := &cobra.Command{
 		Use:   "call",
 		Short: "Call an API endpoint with parameters",
@@ -116,19 +122,25 @@ curl commands.
 Common boundaries and pitfalls:
 - call expects a single spec file, not a split OpenAPI directory
 - the spec file may be JSON or YAML
+- use -n/--name for <name>.openapi.yaml under $OAPI_SPECS_DIR (default ~/.openapi/specs), or -f for a path
 - pass exactly one of --params, --params-file, or --params-url
 - if the spec has no servers[], you must provide --base-url
 - strict mode blocks on validation errors; default mode still sends requests when only warnings exist
 - POST/PUT/PATCH/DELETE can have real side effects, so treat call as a live operation tool`,
-		Example: "  oapi call -f ./openapi.yaml -e \"GET /users\" --base-url https://api.example.com\n  oapi call -f ./openapi.json -e \"POST /cart/add\" --params '{\"item_id\":\"123\",\"quantity\":2}'\n  oapi call -f ./openapi.json -e \"GET /protected\" --bearer-token '<token>'",
+		Example: "  oapi call -f ./openapi.yaml -e \"GET /users\" --base-url https://api.example.com\n  oapi call -n skill -e \"POST /cart/add\" --params '{\"item_id\":\"123\",\"quantity\":2}'\n  oapi call --name skill-internal -e \"GET /protected\" --bearer-token '<token>'",
 		GroupID: "inspection",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("name") && strings.TrimSpace(opts.Name) == "" {
+				return errors.New("--name must not be empty")
+			}
 			return executeCall(opts, stdout, stderr)
 		},
 	}
 	flags := cmd.Flags()
-	flags.StringVarP(&opts.File, "f", "f", opts.File, "OpenAPI spec file (JSON or YAML)")
+	flags.StringVarP(&opts.File, "f", "f", "", "OpenAPI spec file (JSON or YAML; default openapi.json)")
+	flags.StringVarP(&opts.Name, "name", "n", "", "spec name resolved from $"+specsDirEnv+" (default ~/.openapi/specs)")
+	cmd.MarkFlagsMutuallyExclusive("f", "name")
 	flags.StringVarP(&opts.Endpoint, "e", "e", "", "endpoint (e.g., POST /users)")
 	flags.StringVar(&opts.BaseURL, "base-url", "", "base URL of the API server")
 	flags.StringVar(&opts.Params, "params", "", "JSON string of parameters")

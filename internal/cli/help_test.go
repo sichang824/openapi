@@ -122,6 +122,15 @@ func TestRun_Help_ShowsQueryLongBoundaries(t *testing.T) {
 func TestRun_Help_ShowsQuerySpecFileFlagText(t *testing.T) {
 	assertHelpContains(t, []string{"query", "--help"}, []string{
 		"OpenAPI spec file",
+		"-n, --name string",
+		"OAPI_SPECS_DIR",
+	})
+}
+
+func TestRun_Help_ShowsCallSpecNameFlag(t *testing.T) {
+	assertHelpContains(t, []string{"call", "--help"}, []string{
+		"-n, --name string",
+		"OAPI_SPECS_DIR",
 	})
 }
 
