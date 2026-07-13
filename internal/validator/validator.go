@@ -91,38 +91,48 @@ func ValidateParams(params map[string]interface{}, operation spec.Operation, doc
 }
 
 func validateType(field string, value interface{}, schema spec.Schema) error {
-	if schema.Type == "" {
+	if value == nil {
+		if schema.AllowsNull() || len(schema.TypeNames()) == 0 {
+			return nil
+		}
+		return fmt.Errorf("expected %s, got null", schema.DisplayType())
+	}
+
+	types := schema.TypeNames()
+	if len(types) == 0 {
 		return nil
 	}
 
-	switch schema.Type {
-	case "string":
-		if _, ok := value.(string); !ok {
-			return fmt.Errorf("expected string, got %T", value)
-		}
-	case "integer":
-		if _, ok := value.(float64); !ok {
-			return fmt.Errorf("expected integer, got %T", value)
-		}
-	case "number":
-		if _, ok := value.(float64); !ok {
-			return fmt.Errorf("expected number, got %T", value)
-		}
-	case "boolean":
-		if _, ok := value.(bool); !ok {
-			return fmt.Errorf("expected boolean, got %T", value)
-		}
-	case "array":
-		if _, ok := value.([]interface{}); !ok {
-			return fmt.Errorf("expected array, got %T", value)
-		}
-	case "object":
-		if _, ok := value.(map[string]interface{}); !ok {
-			return fmt.Errorf("expected object, got %T", value)
+	for _, typeName := range types {
+		switch typeName {
+		case "null":
+			continue
+		case "string":
+			if _, ok := value.(string); ok {
+				return nil
+			}
+		case "integer", "number":
+			if _, ok := value.(float64); ok {
+				return nil
+			}
+		case "boolean":
+			if _, ok := value.(bool); ok {
+				return nil
+			}
+		case "array":
+			if _, ok := value.([]any); ok {
+				return nil
+			}
+		case "object":
+			if _, ok := value.(map[string]interface{}); ok {
+				return nil
+			}
+		default:
+			return nil
 		}
 	}
 
-	return nil
+	return fmt.Errorf("expected %s, got %T", schema.DisplayType(), value)
 }
 
 // BuildRequestBodyParams returns only parameters that belong in the request body,

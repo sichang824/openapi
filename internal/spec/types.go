@@ -128,7 +128,10 @@ type Components struct {
 }
 
 type Schema struct {
+	// Type keeps the scalar type used by OpenAPI 2.0/3.0 and the primary
+	// non-null type of an OpenAPI 3.1 union. Types preserves a 3.1 type array.
 	Type                 string            `json:"type"`
+	Types                []string          `json:"-"`
 	Ref                  string            `json:"$ref"`
 	Required             []string          `json:"required"`
 	Properties           map[string]Schema `json:"properties"`
@@ -140,6 +143,110 @@ type Schema struct {
 	Default              any               `json:"default"`
 	Maximum              *float64          `json:"maximum"`
 	Nullable             bool              `json:"nullable"`
+}
+
+func (s *Schema) UnmarshalJSON(data []byte) error {
+	type schemaAlias Schema
+	decoded := Schema{}
+	aux := struct {
+		Type json.RawMessage `json:"type"`
+		*schemaAlias
+	}{
+		schemaAlias: (*schemaAlias)(&decoded),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	if len(aux.Type) > 0 {
+		var single string
+		if err := json.Unmarshal(aux.Type, &single); err == nil {
+			decoded.Type = single
+		} else {
+			var union []string
+			if err := json.Unmarshal(aux.Type, &union); err != nil {
+				return fmt.Errorf("schema type must be a string or an array of strings: %w", err)
+			}
+			decoded.Types = union
+			decoded.Type = primarySchemaType(union)
+		}
+	}
+
+	*s = decoded
+	return nil
+}
+
+func (s Schema) MarshalJSON() ([]byte, error) {
+	type schemaAlias Schema
+	var schemaType any
+	if len(s.Types) > 0 {
+		schemaType = s.Types
+	} else if s.Type != "" {
+		schemaType = s.Type
+	}
+
+	return json.Marshal(struct {
+		Type any `json:"type,omitempty"`
+		schemaAlias
+	}{
+		Type:        schemaType,
+		schemaAlias: schemaAlias(s),
+	})
+}
+
+func (s Schema) TypeNames() []string {
+	if len(s.Types) > 0 {
+		return s.Types
+	}
+	if s.Type == "" {
+		return nil
+	}
+	return []string{s.Type}
+}
+
+func (s Schema) AllowsType(typeName string) bool {
+	for _, candidate := range s.TypeNames() {
+		if candidate == typeName {
+			return true
+		}
+	}
+	return false
+}
+
+func (s Schema) AllowsNull() bool {
+	return s.Nullable || s.AllowsType("null")
+}
+
+func (s Schema) DisplayType() string {
+	types := append([]string(nil), s.TypeNames()...)
+	if s.Nullable && !containsString(types, "null") {
+		types = append(types, "null")
+	}
+	if len(types) == 0 {
+		return "unknown"
+	}
+	return strings.Join(types, " | ")
+}
+
+func primarySchemaType(types []string) string {
+	for _, typeName := range types {
+		if typeName != "null" {
+			return typeName
+		}
+	}
+	if len(types) > 0 {
+		return types[0]
+	}
+	return ""
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func Load(path string) (*Document, error) {
@@ -331,16 +438,22 @@ func (d *Document) ResolveSchemaRef(ref string) (Schema, bool) {
 }
 
 func (d *Document) DisplayType(schema Schema) string {
-	if resolved, ok := d.ResolveSchema(schema); ok && resolved.Type != "" {
-		return resolved.Type
+	effective := schema
+	if resolved, ok := d.ResolveSchema(schema); ok && len(resolved.TypeNames()) > 0 {
+		effective = resolved
 	}
-	if schema.Type != "" {
-		return schema.Type
+
+	types := append([]string(nil), effective.TypeNames()...)
+	if len(types) == 0 {
+		if schema.Ref == "" {
+			return "unknown"
+		}
+		types = []string{"object"}
 	}
-	if schema.Ref != "" {
-		return "object"
+	if (schema.Nullable || effective.Nullable) && !containsString(types, "null") {
+		types = append(types, "null")
 	}
-	return "unknown"
+	return strings.Join(types, " | ")
 }
 
 func FormatValue(v any) string {
@@ -560,6 +673,9 @@ func normalizeMalformedEnum(node map[string]any, path string, warnings *[]string
 	if !ok {
 		return
 	}
+	if looksLikeSchemaObject(enumMap) {
+		return
+	}
 
 	keys := make([]string, 0, len(enumMap))
 	for key := range enumMap {
@@ -579,6 +695,15 @@ func normalizeMalformedEnum(node map[string]any, path string, warnings *[]string
 			strings.Join(keys, ", "),
 		),
 	)
+}
+
+func looksLikeSchemaObject(node map[string]any) bool {
+	for _, key := range []string{"type", "$ref", "properties", "items", "allOf", "oneOf", "anyOf", "additionalProperties"} {
+		if _, ok := node[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func collectRequiredNames(raw any) ([]any, map[string]bool) {

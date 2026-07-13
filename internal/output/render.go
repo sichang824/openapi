@@ -278,10 +278,7 @@ func schemaRefOrType(s spec.Schema) string {
 	if s.Ref != "" {
 		return s.Ref
 	}
-	if s.Type != "" {
-		return s.Type
-	}
-	return "unknown"
+	return s.DisplayType()
 }
 
 func renderSchemaTree(w io.Writer, doc *spec.Document, schema spec.Schema, indent string) {

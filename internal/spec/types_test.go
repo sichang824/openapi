@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -262,6 +263,217 @@ func TestLoad_LoadsSwaggerSecurityDefinitions(t *testing.T) {
 	scheme, ok := doc.SecurityScheme("LegacyKey")
 	if !ok || scheme.Name != "X-Legacy-Key" {
 		t.Fatalf("legacy security scheme = %+v, %t", scheme, ok)
+	}
+}
+
+func TestLoad_PreservesOpenAPI31TypeUnion(t *testing.T) {
+	t.Parallel()
+
+	specFile := filepath.Join(t.TempDir(), "openapi31.json")
+	content := `{
+		"openapi": "3.1.0",
+		"info": {"title": "OpenAPI 3.1", "version": "1.0.0"},
+		"paths": {},
+		"components": {
+			"schemas": {
+				"Payload": {
+					"type": "object",
+					"properties": {
+						"items": {
+							"type": ["array", "null"],
+							"items": {"type": "string"}
+						},
+						"note": {
+							"type": ["string", "null"]
+						},
+						"value": {
+							"type": ["string", "number", "null"]
+						}
+					}
+				}
+			}
+		}
+	}`
+
+	if err := os.WriteFile(specFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp spec: %v", err)
+	}
+
+	doc, err := Load(specFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if doc.OpenAPI != "3.1.0" {
+		t.Fatalf("expected openapi 3.1.0, got %q", doc.OpenAPI)
+	}
+
+	payload := doc.Components.Schemas["Payload"]
+	itemsSchema := payload.Properties["items"]
+	if itemsSchema.Type != "array" {
+		t.Fatalf("expected items type array, got %q", itemsSchema.Type)
+	}
+	if got := strings.Join(itemsSchema.TypeNames(), ","); got != "array,null" {
+		t.Fatalf("expected preserved array,null union, got %q", got)
+	}
+	if itemsSchema.Nullable {
+		t.Fatal("expected OpenAPI 3.1 null type to remain distinct from legacy nullable")
+	}
+	if !itemsSchema.AllowsNull() {
+		t.Fatal("expected items schema to allow null")
+	}
+
+	noteSchema := payload.Properties["note"]
+	if noteSchema.Type != "string" {
+		t.Fatalf("expected note type string, got %q", noteSchema.Type)
+	}
+	if got := strings.Join(noteSchema.TypeNames(), ","); got != "string,null" {
+		t.Fatalf("expected preserved string,null union, got %q", got)
+	}
+
+	valueSchema := payload.Properties["value"]
+	if got := strings.Join(valueSchema.TypeNames(), ","); got != "string,number,null" {
+		t.Fatalf("expected full multi-type union, got %q", got)
+	}
+}
+
+func TestLoad_LoadsOpenAPI31SampleSpec(t *testing.T) {
+	t.Parallel()
+
+	doc, err := Load(filepath.Join("..", "..", "testdata", "openapi31.sample.json"))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if doc.OpenAPI != "3.1.0" {
+		t.Fatalf("expected openapi 3.1.0, got %q", doc.OpenAPI)
+	}
+
+	itemSchema, ok := doc.Components.Schemas["Item"]
+	if !ok {
+		t.Fatal("expected Item schema")
+	}
+	noteSchema := itemSchema.Properties["note"]
+	if noteSchema.Type != "string" || !noteSchema.AllowsNull() {
+		t.Fatalf("expected nullable string note schema, got types=%v nullable=%t", noteSchema.TypeNames(), noteSchema.Nullable)
+	}
+
+	operation := doc.Paths["/providers"]["get"]
+	if operation.OperationID != "listProviders" {
+		t.Fatalf("expected listProviders operation, got %q", operation.OperationID)
+	}
+}
+
+func TestDocument_DisplayTypeIncludesNullable(t *testing.T) {
+	t.Parallel()
+
+	doc := &Document{}
+	display := doc.DisplayType(Schema{Type: "string", Nullable: true})
+	if display != "string | null" {
+		t.Fatalf("expected string | null, got %q", display)
+	}
+}
+
+func TestDocument_DisplayTypePreservesOpenAPI31Union(t *testing.T) {
+	t.Parallel()
+
+	doc := &Document{}
+	display := doc.DisplayType(Schema{
+		Type:  "string",
+		Types: []string{"string", "number", "null"},
+	})
+	if display != "string | number | null" {
+		t.Fatalf("expected full union display, got %q", display)
+	}
+}
+
+func TestSchema_MarshalJSONPreservesTypeArray(t *testing.T) {
+	t.Parallel()
+
+	schema := Schema{
+		Type:  "string",
+		Types: []string{"string", "number", "null"},
+	}
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatalf("decode marshaled schema: %v", err)
+	}
+	types, ok := raw["type"].([]any)
+	if !ok || len(types) != 3 || types[0] != "string" || types[1] != "number" || types[2] != "null" {
+		t.Fatalf("expected type array to round-trip, got %s", encoded)
+	}
+}
+
+func TestSchema_PreservesLegacyScalarType(t *testing.T) {
+	t.Parallel()
+
+	var schema Schema
+	if err := json.Unmarshal([]byte(`{"type":"string","nullable":true}`), &schema); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if schema.Type != "string" || len(schema.Types) != 0 || !schema.AllowsNull() {
+		t.Fatalf("unexpected legacy schema: type=%q types=%v nullable=%t", schema.Type, schema.Types, schema.Nullable)
+	}
+
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatalf("decode marshaled schema: %v", err)
+	}
+	if raw["type"] != "string" {
+		t.Fatalf("expected scalar type to round-trip, got %s", encoded)
+	}
+}
+
+func TestLoad_PreservesPropertyNamedEnumAsSchema(t *testing.T) {
+	t.Parallel()
+
+	specFile := filepath.Join(t.TempDir(), "enum-property.json")
+	content := `{
+		"openapi": "3.1.0",
+		"info": {"title": "Enum property", "version": "1.0.0"},
+		"paths": {},
+		"components": {
+			"schemas": {
+				"ModelOption": {
+					"type": "object",
+					"properties": {
+						"enum": {
+							"items": {},
+							"type": ["array", "null"]
+						},
+						"type": {
+							"type": "string"
+						}
+					},
+					"required": ["type"]
+				}
+			}
+		}
+	}`
+
+	if err := os.WriteFile(specFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp spec: %v", err)
+	}
+
+	doc, err := Load(specFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	optionSchema := doc.Components.Schemas["ModelOption"]
+	enumSchema, ok := optionSchema.Properties["enum"]
+	if !ok {
+		t.Fatal("expected enum property schema")
+	}
+	if enumSchema.Type != "array" || !enumSchema.AllowsNull() {
+		t.Fatalf("expected nullable array enum property schema, got types=%v nullable=%t", enumSchema.TypeNames(), enumSchema.Nullable)
 	}
 }
 

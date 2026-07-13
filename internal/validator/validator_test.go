@@ -207,3 +207,45 @@ func TestValidateParams_SkipsRequiredHeaderParameters(t *testing.T) {
 		t.Fatalf("expected no errors when Authorization is supplied via --header, got %#v", result.Errors)
 	}
 }
+
+func TestValidateParams_AllowsNullForNullableSchema(t *testing.T) {
+	operation := spec.Operation{
+		Parameters: []spec.Parameter{
+			{Name: "note", In: "query", Schema: spec.Schema{Type: "string", Nullable: true}},
+		},
+	}
+
+	result := ValidateParams(map[string]interface{}{
+		"note": nil,
+	}, operation, &spec.Document{}, true)
+	if result.HasErrors() {
+		t.Fatalf("expected nullable query param to accept null, got %#v", result.Errors)
+	}
+}
+
+func TestValidateParams_ValidatesOpenAPI31TypeUnion(t *testing.T) {
+	operation := spec.Operation{
+		Parameters: []spec.Parameter{
+			{
+				Name: "value",
+				In:   "query",
+				Schema: spec.Schema{
+					Type:  "string",
+					Types: []string{"string", "number", "null"},
+				},
+			},
+		},
+	}
+
+	for _, value := range []interface{}{"text", float64(1), nil} {
+		result := ValidateParams(map[string]interface{}{"value": value}, operation, &spec.Document{}, true)
+		if result.HasErrors() {
+			t.Fatalf("expected union to accept %#v, got %#v", value, result.Errors)
+		}
+	}
+
+	result := ValidateParams(map[string]interface{}{"value": true}, operation, &spec.Document{}, true)
+	if !result.HasErrors() {
+		t.Fatal("expected union to reject boolean")
+	}
+}
