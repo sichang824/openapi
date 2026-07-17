@@ -42,6 +42,16 @@ type CallResponse struct {
 }
 
 func Call(req *CallRequest) (*CallResponse, error) {
+	var body bytes.Buffer
+	resp, _, err := CallTo(req, &body)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = body.String()
+	return resp, nil
+}
+
+func CallTo(req *CallRequest, dst io.Writer) (*CallResponse, int64, error) {
 	url := ""
 	if shouldSendQuery(req) {
 		url = buildURL(req.BaseURL, req.Path, req.Params, req.Operation, true)
@@ -55,7 +65,7 @@ func Call(req *CallRequest) (*CallResponse, error) {
 
 	httpReq, err := http.NewRequest(req.Method, url, bodyReader)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	httpReq.Header.Set("Accept", "application/json")
@@ -78,21 +88,20 @@ func Call(req *CallRequest) (*CallResponse, error) {
 	client := &http.Client{CheckRedirect: rejectCrossOriginAutoHeaderRedirects(req.AutoHeaders)}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	written, err := io.Copy(dst, resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, written, err
 	}
 
 	return &CallResponse{
 		StatusCode: resp.StatusCode,
 		Headers:    map[string][]string(resp.Header),
-		Body:       string(respBody),
 		URL:        url,
-	}, nil
+	}, written, nil
 }
 
 func rejectCrossOriginAutoHeaderRedirects(headers []ResolvedHeader) func(*http.Request, []*http.Request) error {
@@ -197,18 +206,7 @@ func shouldSendQuery(req *CallRequest) bool {
 
 func FormatResponse(resp *CallResponse, verbosity int) string {
 	var buf bytes.Buffer
-
-	if verbosity >= 1 {
-		fmt.Fprintf(&buf, "Status: %d %s\n", resp.StatusCode, http.StatusText(resp.StatusCode))
-	}
-	if verbosity >= 2 {
-		fmt.Fprintf(&buf, "Headers:\n")
-		for key, values := range resp.Headers {
-			for _, val := range values {
-				fmt.Fprintf(&buf, "  %s: %s\n", key, val)
-			}
-		}
-	}
+	buf.WriteString(FormatResponseMetadata(resp, verbosity))
 
 	var prettyJSON bytes.Buffer
 	if err := json.Indent(&prettyJSON, []byte(resp.Body), "", "  "); err == nil {
@@ -222,6 +220,24 @@ func FormatResponse(resp *CallResponse, verbosity int) string {
 			fmt.Fprintf(&buf, "Body:\n%s\n", resp.Body)
 		} else {
 			fmt.Fprintf(&buf, "%s\n", resp.Body)
+		}
+	}
+
+	return buf.String()
+}
+
+func FormatResponseMetadata(resp *CallResponse, verbosity int) string {
+	var buf bytes.Buffer
+
+	if verbosity >= 1 {
+		fmt.Fprintf(&buf, "Status: %d %s\n", resp.StatusCode, http.StatusText(resp.StatusCode))
+	}
+	if verbosity >= 2 {
+		fmt.Fprintf(&buf, "Headers:\n")
+		for key, values := range resp.Headers {
+			for _, val := range values {
+				fmt.Fprintf(&buf, "  %s: %s\n", key, val)
+			}
 		}
 	}
 

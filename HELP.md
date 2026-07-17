@@ -355,9 +355,19 @@ oapi call -f openapi.json -e "GET /Api/v1/search/conditions" --params-url "order
 
 ### Response output
 
-- Default: formatted response body only
-- `-v` and above: request preamble such as method/path and base URL
-- Higher verbosity levels: more request inspection detail before the response
+- Default: formatted response body on stdout
+- `-o path` / `--output path`: stream the raw response body to a file without formatting or added newlines
+- The output directory must already exist; invalid targets fail before the HTTP request is sent
+- Downloads use a temporary file and replace the target only after the full body is received; partial transfers do not leave the final file
+- HTTP 4xx/5xx response bodies are still written to the selected output file
+- With `-v` and `-o`, request/response metadata and the byte count go to stderr while stdout remains empty
+
+```bash
+oapi call -f openapi.yaml -e "GET /files/{id}" \
+  --base-url https://api.example.com \
+  --params '{"id":"file-abc"}' \
+  -o ./download.bin
+```
 
 ## Troubleshooting checklist
 

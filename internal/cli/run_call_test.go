@@ -235,6 +235,263 @@ func TestRun_Call_VerboseLevel2ShowsHeaders(t *testing.T) {
 	}
 }
 
+func TestRun_Call_WritesBinaryResponseToOutputFile(t *testing.T) {
+	payload := []byte{0x50, 0x4b, 0x03, 0x04, 0x00, 0xff, 0x0a}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	outputPath := filepath.Join(t.TempDir(), "download.bin")
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	err := Run([]string{
+		"call",
+		"-f", "../../testdata/openapi.sample.json",
+		"-e", "GET /users",
+		"--base-url", server.URL,
+		"-o", outputPath,
+	}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("Run returned error with -o: %v; stderr=%s", err, errOut.String())
+	}
+
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output file: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("output bytes = %v, want %v", got, payload)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty when -o is used", out.String())
+	}
+}
+
+func TestRun_Call_OutputWithVerboseWritesMetadataToStderr(t *testing.T) {
+	payload := []byte{0x00, 0xff, 0x01, 0xfe}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	outputPath := filepath.Join(t.TempDir(), "download.bin")
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	err := Run([]string{
+		"call",
+		"-v",
+		"-f", "../../testdata/openapi.sample.json",
+		"-e", "GET /users",
+		"--base-url", server.URL,
+		"--output", outputPath,
+	}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("Run returned error with -v -o: %v; stderr=%s", err, errOut.String())
+	}
+
+	if out.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty when -o is used", out.String())
+	}
+	diagnostics := errOut.String()
+	for _, want := range []string{
+		"Calling: GET /users",
+		"Status: 200 OK",
+		"Body written to " + outputPath,
+	} {
+		if !strings.Contains(diagnostics, want) {
+			t.Fatalf("stderr missing %q: %s", want, diagnostics)
+		}
+	}
+	if bytes.Contains(errOut.Bytes(), payload) {
+		t.Fatalf("stderr contains response body bytes: %v", errOut.Bytes())
+	}
+}
+
+func TestRun_Call_InvalidOutputPathFailsBeforeRequest(t *testing.T) {
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		_, _ = w.Write([]byte("unexpected"))
+	}))
+	defer server.Close()
+
+	outputPath := filepath.Join(t.TempDir(), "missing", "download.bin")
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	err := Run([]string{
+		"call",
+		"-f", "../../testdata/openapi.sample.json",
+		"-e", "GET /users",
+		"--base-url", server.URL,
+		"-o", outputPath,
+	}, &out, &errOut)
+	if err == nil {
+		t.Fatal("Run returned nil error for an invalid output path")
+	}
+	if requested {
+		t.Fatal("HTTP request was sent before the output path was validated")
+	}
+}
+
+func TestRun_Call_OutputDirectoryFailsBeforeRequest(t *testing.T) {
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		_, _ = w.Write([]byte("unexpected"))
+	}))
+	defer server.Close()
+
+	outputPath := t.TempDir()
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	err := Run([]string{
+		"call",
+		"-f", "../../testdata/openapi.sample.json",
+		"-e", "GET /users",
+		"--base-url", server.URL,
+		"-o", outputPath,
+	}, &out, &errOut)
+	if err == nil {
+		t.Fatal("Run returned nil error when the output path is a directory")
+	}
+	if requested {
+		t.Fatal("HTTP request was sent before the output path was rejected")
+	}
+}
+
+func TestRun_Call_PartialDownloadDoesNotLeaveOutputFile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "10")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("short"))
+	}))
+	defer server.Close()
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "download.bin")
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	err := Run([]string{
+		"call",
+		"-f", "../../testdata/openapi.sample.json",
+		"-e", "GET /users",
+		"--base-url", server.URL,
+		"-o", outputPath,
+	}, &out, &errOut)
+	if err == nil {
+		t.Fatal("Run returned nil error for a partial response body")
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("output file exists after partial download: %v", err)
+	}
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		t.Fatalf("read output directory: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("output directory contains temporary files after failure: %v", entries)
+	}
+}
+
+func TestRun_Call_WritesHTTPErrorResponseBodyToOutputFile(t *testing.T) {
+	payload := []byte(`{"error":"not found"}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	outputPath := filepath.Join(t.TempDir(), "error.json")
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	err := Run([]string{
+		"call",
+		"-f", "../../testdata/openapi.sample.json",
+		"-e", "GET /users",
+		"--base-url", server.URL,
+		"-o", outputPath,
+	}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("Run returned error for HTTP 404 response: %v; stderr=%s", err, errOut.String())
+	}
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output file: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("output bytes = %q, want %q", got, payload)
+	}
+}
+
+func TestRun_Call_OutputReplacesExistingFile(t *testing.T) {
+	payload := []byte("new response")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	outputPath := filepath.Join(t.TempDir(), "download.txt")
+	if err := os.WriteFile(outputPath, []byte("old response"), 0o600); err != nil {
+		t.Fatalf("write existing output file: %v", err)
+	}
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	err := Run([]string{
+		"call",
+		"-f", "../../testdata/openapi.sample.json",
+		"-e", "GET /users",
+		"--base-url", server.URL,
+		"-o", outputPath,
+	}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("Run returned error replacing output file: %v; stderr=%s", err, errOut.String())
+	}
+
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read replaced output file: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("output bytes = %q, want %q", got, payload)
+	}
+}
+
+func TestRun_Call_RejectsEmptyOutputPathBeforeRequest(t *testing.T) {
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		_, _ = w.Write([]byte("unexpected"))
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	err := Run([]string{
+		"call",
+		"-f", "../../testdata/openapi.sample.json",
+		"-e", "GET /users",
+		"--base-url", server.URL,
+		"--output", "",
+	}, &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "--output must not be empty") {
+		t.Fatalf("error = %v, want empty output path error", err)
+	}
+	if requested {
+		t.Fatal("HTTP request was sent for an empty output path")
+	}
+}
+
 func TestRun_Call_DefaultsBaseURLToFirstServerInSpec(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/users" {

@@ -157,6 +157,12 @@ oapi call -f ./openapi.yaml -e "PUT /files/{id}" \
   --params '{"id":"file-abc"}' \
   --body-file ./payload.bin \
   --content-type application/octet-stream
+
+# Binary download (curl -o style)
+oapi call -f ./openapi.yaml -e "GET /files/{id}" \
+  --base-url https://api.example.com \
+  --params '{"id":"file-abc"}' \
+  -o ./download.bin
 ```
 
 ## `oapi query` behavior
@@ -205,6 +211,14 @@ oapi call -f ./openapi.yaml -e "PUT /files/{id}" \
 - If neither is provided, the CLI validates and sends an empty parameter map.
 - Path parameters can be supplied through `--params` or `--params-file` using the parameter name from the spec.
 - Query parameters defined at the path-item level are also valid call inputs; do not assume `call` only respects operation-local parameters.
+
+### Response output
+
+- Without `-o`, `call` keeps its existing behavior and prints the formatted response body to stdout.
+- `-o path` / `--output path` streams the raw response body to the file without JSON formatting or added newlines; stdout remains empty.
+- The output directory must already exist. The CLI validates the target before sending the request, writes through a temporary file, and replaces an existing target only after the response body is complete.
+- Transport or file-write failures remove the temporary download. HTTP 4xx/5xx responses are still complete HTTP responses, so their bodies are written to the output file.
+- With `-v` or higher and `-o`, request/response metadata and the downloaded byte count go to stderr; response body bytes remain file-only.
 
 ### PowerShell/Windows guidance
 
@@ -267,8 +281,9 @@ Strict mode, `--strict`:
 
 ### Call verbosity
 
-- Default: print formatted response only.
-- `-v` and above: show request preamble such as method/path and resolved base URL before the response.
+- Default without `-o`: print the formatted response body to stdout.
+- With `-o`: write the raw response body to the selected file and keep stdout empty.
+- `-v` and above: show request preamble such as method/path and resolved base URL; with `-o`, this metadata goes to stderr.
 - Higher verbosity on `call` is mainly for request inspection; use it when debugging constructed requests.
 
 ## Typical playbooks

@@ -156,6 +156,7 @@ type callOptions struct {
 	ParamsFile     string
 	ParamsURL      string
 	BodyFile       string
+	Output         string
 	ContentType    string
 	Cookie         string
 	CookiePath     string
@@ -325,6 +326,15 @@ func executeCall(opts callOptions, stdout io.Writer, stderr io.Writer) error {
 		AutoHeaders: resolvedAutoHeaders,
 	}
 
+	outputPath := strings.TrimSpace(opts.Output)
+	responseOutput, err := prepareResponseOutput(outputPath)
+	if err != nil {
+		return err
+	}
+	if responseOutput != nil {
+		defer responseOutput.abort()
+	}
+
 	if len(resolvedAutoHeaders) > 0 {
 		names := make([]string, 0, len(resolvedAutoHeaders))
 		for _, header := range resolvedAutoHeaders {
@@ -333,31 +343,110 @@ func executeCall(opts callOptions, stdout io.Writer, stderr io.Writer) error {
 		_, _ = fmt.Fprintf(stderr, "Auto headers enabled: %s (environment, redacted) -> %s\n", strings.Join(names, ", "), requestOrigin(resolvedBaseURL))
 	}
 
-	callResp, err := caller.Call(callReq)
+	var callResp *caller.CallResponse
+	var responseBytes int64
+	if responseOutput != nil {
+		callResp, responseBytes, err = caller.CallTo(callReq, responseOutput.file)
+	} else {
+		callResp, err = caller.Call(callReq)
+	}
 	if err != nil {
 		return err
 	}
 
-	if opts.Verbose >= 1 {
-		_, _ = fmt.Fprintf(stdout, "Calling: %s %s\n", method, path)
-		fmt.Fprintf(stdout, "Base URL: %s\n", resolvedBaseURL)
-		if opts.Verbose >= 3 && callResp.URL != "" {
-			fmt.Fprintf(stdout, "URL: %s\n", callResp.URL)
+	if responseOutput != nil {
+		if err := responseOutput.commit(); err != nil {
+			return err
 		}
-		if opts.Verbose >= 3 && contentType != "" {
-			fmt.Fprintf(stdout, "Content-Type: %s\n", contentType)
+		writeCallRequestMetadata(stderr, callReq, callResp, opts.Verbose)
+		_, _ = fmt.Fprint(stderr, caller.FormatResponseMetadata(callResp, opts.Verbose))
+		if opts.Verbose >= 1 {
+			_, _ = fmt.Fprintf(stderr, "Body written to %s (%d bytes)\n", outputPath, responseBytes)
 		}
-		if opts.Verbose >= 3 && len(body) > 0 {
-			fmt.Fprintf(stdout, "Body: %s\n", formatRequestBodyForVerbose(body))
-		}
-		if opts.Verbose >= 3 && cookieHeader != "" {
-			fmt.Fprintf(stdout, "Cookie: <redacted; length=%d>\n", len(cookieHeader))
-		}
-		_, _ = fmt.Fprintln(stdout)
+		return nil
 	}
 
+	writeCallRequestMetadata(stdout, callReq, callResp, opts.Verbose)
 	_, _ = fmt.Fprintln(stdout, caller.FormatResponse(callResp, opts.Verbose))
 	return nil
+}
+
+type responseOutputFile struct {
+	file     *os.File
+	path     string
+	tempPath string
+}
+
+func prepareResponseOutput(path string) (*responseOutputFile, error) {
+	if path == "" {
+		return nil, nil
+	}
+	if info, err := os.Stat(path); err == nil {
+		if info.IsDir() {
+			return nil, fmt.Errorf("prepare output: %s is a directory", path)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("prepare output: %w", err)
+	}
+
+	tempFile, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return nil, fmt.Errorf("prepare output: %w", err)
+	}
+	return &responseOutputFile{
+		file:     tempFile,
+		path:     path,
+		tempPath: tempFile.Name(),
+	}, nil
+}
+
+func (output *responseOutputFile) commit() error {
+	if err := output.file.Close(); err != nil {
+		return fmt.Errorf("close output: %w", err)
+	}
+	output.file = nil
+
+	if runtime.GOOS == "windows" {
+		if err := os.Remove(output.path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("replace output: %w", err)
+		}
+	}
+	if err := os.Rename(output.tempPath, output.path); err != nil {
+		return fmt.Errorf("commit output: %w", err)
+	}
+	output.tempPath = ""
+	return nil
+}
+
+func (output *responseOutputFile) abort() {
+	if output.file != nil {
+		_ = output.file.Close()
+	}
+	if output.tempPath != "" {
+		_ = os.Remove(output.tempPath)
+	}
+}
+
+func writeCallRequestMetadata(w io.Writer, req *caller.CallRequest, resp *caller.CallResponse, verbosity int) {
+	if verbosity < 1 {
+		return
+	}
+
+	_, _ = fmt.Fprintf(w, "Calling: %s %s\n", req.Method, req.Path)
+	_, _ = fmt.Fprintf(w, "Base URL: %s\n", req.BaseURL)
+	if verbosity >= 3 && resp.URL != "" {
+		_, _ = fmt.Fprintf(w, "URL: %s\n", resp.URL)
+	}
+	if verbosity >= 3 && req.ContentType != "" {
+		_, _ = fmt.Fprintf(w, "Content-Type: %s\n", req.ContentType)
+	}
+	if verbosity >= 3 && len(req.Body) > 0 {
+		_, _ = fmt.Fprintf(w, "Body: %s\n", formatRequestBodyForVerbose(req.Body))
+	}
+	if verbosity >= 3 && req.Cookie != "" {
+		_, _ = fmt.Fprintf(w, "Cookie: <redacted; length=%d>\n", len(req.Cookie))
+	}
+	_, _ = fmt.Fprintln(w)
 }
 
 func requestOrigin(rawURL string) string {

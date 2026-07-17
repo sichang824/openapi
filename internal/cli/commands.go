@@ -140,16 +140,20 @@ Common boundaries and pitfalls:
 - the spec file may be JSON or YAML
 - use -n/--name for <name>.openapi.yaml under $OAPI_SPECS_DIR (default ~/.openapi/specs), or -f for a path
 - pass exactly one of --params, --params-file, or --params-url
+- use -o/--output to stream the raw response body to a file; verbose metadata then goes to stderr
 - if the spec has no servers[], you must provide --base-url
 - automatic OAPI_HEADER_* injection is off by default and only uses headers declared by the operation contract
 - strict mode blocks on validation errors; default mode still sends requests when only warnings exist
 - POST/PUT/PATCH/DELETE can have real side effects, so treat call as a live operation tool`,
-		Example: "  oapi call -f ./openapi.yaml -e \"GET /users\" --base-url https://api.example.com\n  oapi call -n skill -e \"POST /cart/add\" --params '{\"item_id\":\"123\",\"quantity\":2}'\n  oapi call -n kb -e \"GET /protected\" --auto-headers\n  oapi call --name skill-internal -e \"GET /protected\" --bearer-token '<token>'",
+		Example: "  oapi call -f ./openapi.yaml -e \"GET /users\" --base-url https://api.example.com\n  oapi call -n skill -e \"POST /cart/add\" --params '{\"item_id\":\"123\",\"quantity\":2}'\n  oapi call -f ./openapi.yaml -e \"GET /files/{id}\" --params '{\"id\":\"file-abc\"}' -o download.bin\n  oapi call -n kb -e \"GET /protected\" --auto-headers\n  oapi call --name skill-internal -e \"GET /protected\" --bearer-token '<token>'",
 		GroupID: "inspection",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("name") && strings.TrimSpace(opts.Name) == "" {
 				return errors.New("--name must not be empty")
+			}
+			if cmd.Flags().Changed("output") && strings.TrimSpace(opts.Output) == "" {
+				return errors.New("--output must not be empty")
 			}
 			opts.AutoHeadersSet = cmd.Flags().Changed("auto-headers")
 			return executeCall(opts, stdout, stderr)
@@ -165,6 +169,7 @@ Common boundaries and pitfalls:
 	flags.StringVar(&opts.ParamsFile, "params-file", "", "JSON file containing parameters")
 	flags.StringVar(&opts.ParamsURL, "params-url", "", "URL query string parameters (supports repeated keys/arrays, e.g., key1=val1&key1=val2 or order[]=status&order[]=admin_order)")
 	flags.StringVar(&opts.BodyFile, "body-file", "", "raw request body file (curl --data-binary style)")
+	flags.StringVarP(&opts.Output, "output", "o", "", "write response body to file")
 	flags.StringVar(&opts.ContentType, "content-type", "", "override request Content-Type header")
 	flags.StringArrayVar(&opts.Headers, "header", nil, "custom request header in 'Name: Value' form; repeatable")
 	flags.StringVar(&opts.BearerToken, "bearer-token", "", "set Authorization: Bearer <token> on the request")

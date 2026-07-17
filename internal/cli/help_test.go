@@ -130,6 +130,8 @@ func TestRun_Help_ShowsQuerySpecFileFlagText(t *testing.T) {
 func TestRun_Help_ShowsCallSpecNameFlag(t *testing.T) {
 	assertHelpContains(t, []string{"call", "--help"}, []string{
 		"-n, --name string",
+		"-o, --output string",
+		"write response body to file",
 		"OAPI_SPECS_DIR",
 		"--auto-headers",
 		"OAPI_HEADER_*",

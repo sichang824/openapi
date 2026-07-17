@@ -77,12 +77,15 @@ oapi call -f ./openapi.json -e "GET /workflow-runs" --params '{"workflowDefiniti
 oapi call -f ./openapi.json -e "GET /protected" --base-url https://api.example.com --bearer-token "$TOKEN"
 oapi call -f ./openapi.json -e "GET /protected" --base-url https://api.example.com --header "X-Trace-Id: debug-123"
 
+# Stream a response body to a file
+oapi call -f ./openapi.yaml -e "GET /files/{id}" --base-url https://api.example.com --params '{"id":"file-abc"}' -o ./download.bin
+
 # Opt-in environment headers, filtered by the operation's OpenAPI contract
 OAPI_HEADER_X_API_KEY="$TOKEN" oapi call -n kb -e "GET /protected" --auto-headers
 OAPI_AUTO_HEADERS=1 OAPI_HEADER_AUTHORIZATION="Bearer $TOKEN" oapi call -n iam -e "GET /protected"
 ```
 
-`call` supports JSON and YAML specs, `--params` / `--params-file` / `--params-url` are mutually exclusive, and `--strict` upgrades warnings into validation failures. Automatic headers are disabled by default. When enabled, only `OAPI_HEADER_*` candidates allowed by effective OpenAPI security or header parameters are sent; explicit CLI values win.
+`call` supports JSON and YAML specs, `--params` / `--params-file` / `--params-url` are mutually exclusive, and `--strict` upgrades warnings into validation failures. `-o` / `--output` streams the raw response body to a file; stdout stays empty, while verbose metadata goes to stderr. Automatic headers are disabled by default. When enabled, only `OAPI_HEADER_*` candidates allowed by effective OpenAPI security or header parameters are sent; explicit CLI values win.
 
 ## Repository map
 
